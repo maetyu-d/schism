@@ -1,0 +1,820 @@
+#include "GraphLanguage.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <memory>
+#include <sstream>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace duodsp::text
+{
+namespace
+{
+enum class TokenType
+{
+    identifier,
+    number,
+    atControl,
+    lParen,
+    rParen,
+    comma,
+    semicolon,
+    assign,
+    plus,
+    minus,
+    star,
+    slash,
+    arrow,
+    dot,
+    endOfFile
+};
+
+struct Token
+{
+    TokenType type = TokenType::endOfFile;
+    std::string lexeme;
+    int start = 0;
+    int end = 0;
+};
+
+struct Lexer
+{
+    explicit Lexer(const std::string& s) : source(s) {}
+
+    std::vector<Token> lex()
+    {
+        std::vector<Token> tokens;
+        while (!isAtEnd())
+        {
+            const auto c = peek();
+            if (std::isspace(static_cast<unsigned char>(c)))
+            {
+                advance();
+                continue;
+            }
+
+            if (c == '/' && peekNext() == '/')
+            {
+                while (!isAtEnd() && peek() != '\n')
+                    advance();
+                continue;
+            }
+
+            if (std::isdigit(static_cast<unsigned char>(c)))
+            {
+                tokens.push_back(numberToken());
+                continue;
+            }
+
+            if (std::isalpha(static_cast<unsigned char>(c)) || c == '_')
+            {
+                tokens.push_back(identifierToken());
+                continue;
+            }
+
+            const int start = pos;
+            switch (c)
+            {
+                case '@':
+                {
+                    advance();
+                    if (match('k'))
+                        tokens.push_back({ TokenType::atControl, "@k", start, pos });
+                    break;
+                }
+                case '(':
+                    advance();
+                    tokens.push_back({ TokenType::lParen, "(", start, pos });
+                    break;
+                case ')':
+                    advance();
+                    tokens.push_back({ TokenType::rParen, ")", start, pos });
+                    break;
+                case ',':
+                    advance();
+                    tokens.push_back({ TokenType::comma, ",", start, pos });
+                    break;
+                case ';':
+                    advance();
+                    tokens.push_back({ TokenType::semicolon, ";", start, pos });
+                    break;
+                case '=':
+                    advance();
+                    tokens.push_back({ TokenType::assign, "=", start, pos });
+                    break;
+                case '+':
+                    advance();
+                    tokens.push_back({ TokenType::plus, "+", start, pos });
+                    break;
+                case '-':
+                    advance();
+                    if (match('>'))
+                        tokens.push_back({ TokenType::arrow, "->", start, pos });
+                    else
+                        tokens.push_back({ TokenType::minus, "-", start, pos });
+                    break;
+                case '*':
+                    advance();
+                    tokens.push_back({ TokenType::star, "*", start, pos });
+                    break;
+                case '/':
+                    advance();
+                    tokens.push_back({ TokenType::slash, "/", start, pos });
+                    break;
+                case '.':
+                    advance();
+                    tokens.push_back({ TokenType::dot, ".", start, pos });
+                    break;
+                default:
+                    advance();
+                    break;
+            }
+        }
+
+        tokens.push_back({ TokenType::endOfFile, "", pos, pos });
+        return tokens;
+    }
+
+    const std::string& source;
+    int pos = 0;
+
+    bool isAtEnd() const { return pos >= static_cast<int>(source.size()); }
+    char peek() const { return source[static_cast<size_t>(pos)]; }
+    char peekNext() const
+    {
+        const auto next = pos + 1;
+        if (next >= static_cast<int>(source.size()))
+            return '\0';
+        return source[static_cast<size_t>(next)];
+    }
+    char advance() { return source[static_cast<size_t>(pos++)]; }
+    bool match(const char expected)
+    {
+        if (isAtEnd() || source[static_cast<size_t>(pos)] != expected)
+            return false;
+        ++pos;
+        return true;
+    }
+
+    Token numberToken()
+    {
+        const int start = pos;
+        while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek())))
+            advance();
+        if (!isAtEnd() && peek() == '.')
+        {
+            advance();
+            while (!isAtEnd() && std::isdigit(static_cast<unsigned char>(peek())))
+                advance();
+        }
+        return { TokenType::number, source.substr(static_cast<size_t>(start), static_cast<size_t>(pos - start)), start, pos };
+    }
+
+    Token identifierToken()
+    {
+        const int start = pos;
+        while (!isAtEnd())
+        {
+            const auto c = peek();
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_')
+                break;
+            advance();
+        }
+        return { TokenType::identifier, source.substr(static_cast<size_t>(start), static_cast<size_t>(pos - start)), start, pos };
+    }
+};
+
+enum class ExprKind
+{
+    number,
+    symbol,
+    call,
+    binary,
+    pipeline,
+    controlRate
+};
+
+struct Expr
+{
+    ExprKind kind = ExprKind::number;
+    int start = 0;
+    int end = 0;
+    std::string text;
+    std::string op;
+    std::vector<std::unique_ptr<Expr>> args;
+};
+
+struct Stmt
+{
+    std::string binding;
+    std::unique_ptr<Expr> expr;
+    int start = 0;
+    int end = 0;
+};
+
+class Parser
+{
+public:
+    explicit Parser(std::vector<Token> toks) : tokens(std::move(toks)) {}
+
+    std::vector<Stmt> parse()
+    {
+        std::vector<Stmt> stmts;
+        while (!isAtEnd())
+        {
+            if (check(TokenType::endOfFile))
+                break;
+            if (auto stmt = parseStatement(); stmt.expr != nullptr)
+                stmts.push_back(std::move(stmt));
+            else
+                synchronize();
+        }
+        return stmts;
+    }
+
+    const std::vector<Diagnostic>& diagnostics() const { return diags; }
+
+private:
+    std::vector<Token> tokens;
+    std::vector<Diagnostic> diags;
+    int current = 0;
+
+    bool isAtEnd() const { return tokens[static_cast<size_t>(current)].type == TokenType::endOfFile; }
+    const Token& peek() const { return tokens[static_cast<size_t>(current)]; }
+    const Token& previous() const { return tokens[static_cast<size_t>(current - 1)]; }
+
+    bool check(TokenType type) const
+    {
+        if (isAtEnd())
+            return false;
+        return peek().type == type;
+    }
+
+    const Token& advance()
+    {
+        if (!isAtEnd())
+            ++current;
+        return previous();
+    }
+
+    bool match(TokenType type)
+    {
+        if (!check(type))
+            return false;
+        advance();
+        return true;
+    }
+
+    void synchronize()
+    {
+        while (!isAtEnd())
+        {
+            if (previous().type == TokenType::semicolon)
+                return;
+            advance();
+        }
+    }
+
+    Stmt parseStatement()
+    {
+        Stmt stmt;
+        stmt.start = peek().start;
+
+        if (check(TokenType::identifier) && tokens[static_cast<size_t>(current + 1)].type == TokenType::assign)
+        {
+            stmt.binding = advance().lexeme;
+            advance(); // =
+            stmt.expr = parseExpression();
+        }
+        else
+        {
+            stmt.expr = parseExpression();
+        }
+
+        if (!match(TokenType::semicolon))
+        {
+            diags.push_back({ "Expected ';' at end of statement.", peek().start, peek().end });
+            return {};
+        }
+
+        stmt.end = previous().end;
+        return stmt;
+    }
+
+    std::unique_ptr<Expr> parseExpression()
+    {
+        return parsePipeline();
+    }
+
+    std::unique_ptr<Expr> parsePipeline()
+    {
+        auto lhs = parseAddition();
+        while (match(TokenType::arrow))
+        {
+            auto rhs = parseCallOnly();
+            if (rhs == nullptr)
+            {
+                diags.push_back({ "Expected function call on right side of pipeline.", previous().start, previous().end });
+                return lhs;
+            }
+            auto p = std::make_unique<Expr>();
+            p->kind = ExprKind::pipeline;
+            p->start = lhs->start;
+            p->end = rhs->end;
+            p->args.push_back(std::move(lhs));
+            p->args.push_back(std::move(rhs));
+            lhs = std::move(p);
+        }
+        return lhs;
+    }
+
+    std::unique_ptr<Expr> parseAddition()
+    {
+        auto expr = parseMultiplication();
+        while (match(TokenType::plus) || match(TokenType::minus))
+        {
+            const auto op = previous().lexeme;
+            auto rhs = parseMultiplication();
+            auto b = std::make_unique<Expr>();
+            b->kind = ExprKind::binary;
+            b->op = op;
+            b->start = expr->start;
+            b->end = rhs->end;
+            b->args.push_back(std::move(expr));
+            b->args.push_back(std::move(rhs));
+            expr = std::move(b);
+        }
+        return expr;
+    }
+
+    std::unique_ptr<Expr> parseMultiplication()
+    {
+        auto expr = parsePostfix();
+        while (match(TokenType::star) || match(TokenType::slash))
+        {
+            const auto op = previous().lexeme;
+            auto rhs = parsePostfix();
+            auto b = std::make_unique<Expr>();
+            b->kind = ExprKind::binary;
+            b->op = op;
+            b->start = expr->start;
+            b->end = rhs->end;
+            b->args.push_back(std::move(expr));
+            b->args.push_back(std::move(rhs));
+            expr = std::move(b);
+        }
+        return expr;
+    }
+
+    std::unique_ptr<Expr> parsePostfix()
+    {
+        auto base = parsePrimary();
+        while (match(TokenType::dot))
+        {
+            if (!match(TokenType::identifier))
+            {
+                diags.push_back({ "Expected method name after '.'.", peek().start, peek().end });
+                return base;
+            }
+            const auto method = previous().lexeme;
+
+            auto call = std::make_unique<Expr>();
+            call->kind = ExprKind::call;
+            call->text = method;
+            call->start = base->start;
+            call->args.push_back(std::move(base));
+
+            if (match(TokenType::lParen))
+            {
+                if (!check(TokenType::rParen))
+                {
+                    do
+                    {
+                        call->args.push_back(parseExpression());
+                    } while (match(TokenType::comma));
+                }
+                if (!match(TokenType::rParen))
+                    diags.push_back({ "Expected ')' after method call.", peek().start, peek().end });
+            }
+            call->end = previous().end;
+            base = std::move(call);
+        }
+        return base;
+    }
+
+    std::unique_ptr<Expr> parsePrimary()
+    {
+        if (match(TokenType::atControl))
+        {
+            auto x = std::make_unique<Expr>();
+            x->kind = ExprKind::controlRate;
+            x->start = previous().start;
+            x->args.push_back(parsePrimary());
+            x->end = x->args[0] != nullptr ? x->args[0]->end : previous().end;
+            return x;
+        }
+
+        if (match(TokenType::number))
+        {
+            auto x = std::make_unique<Expr>();
+            x->kind = ExprKind::number;
+            x->text = previous().lexeme;
+            x->start = previous().start;
+            x->end = previous().end;
+            return x;
+        }
+
+        if (check(TokenType::identifier))
+        {
+            if (tokens[static_cast<size_t>(current + 1)].type == TokenType::lParen)
+                return parseCallOnly();
+
+            auto x = std::make_unique<Expr>();
+            x->kind = ExprKind::symbol;
+            x->text = advance().lexeme;
+            x->start = previous().start;
+            x->end = previous().end;
+            return x;
+        }
+
+        if (match(TokenType::lParen))
+        {
+            auto expr = parseExpression();
+            if (!match(TokenType::rParen))
+                diags.push_back({ "Expected ')' after expression.", peek().start, peek().end });
+            return expr;
+        }
+
+        diags.push_back({ "Unexpected token.", peek().start, peek().end });
+        return {};
+    }
+
+    std::unique_ptr<Expr> parseCallOnly()
+    {
+        if (!match(TokenType::identifier))
+            return {};
+
+        auto call = std::make_unique<Expr>();
+        call->kind = ExprKind::call;
+        call->text = previous().lexeme;
+        call->start = previous().start;
+
+        if (!match(TokenType::lParen))
+        {
+            diags.push_back({ "Expected '(' after function name.", peek().start, peek().end });
+            return {};
+        }
+
+        if (!check(TokenType::rParen))
+        {
+            do
+            {
+                call->args.push_back(parseExpression());
+            } while (match(TokenType::comma));
+        }
+
+        if (!match(TokenType::rParen))
+            diags.push_back({ "Expected ')' after function arguments.", peek().start, peek().end });
+
+        call->end = previous().end;
+        return call;
+    }
+};
+
+struct CompileContext
+{
+    ir::Graph graph;
+    sync::SyncMap syncMap;
+    std::vector<Diagnostic> diagnostics;
+    std::unordered_map<std::string, std::string> bindingToNode;
+    int generated = 1;
+
+    std::string makeId(const std::string& seed)
+    {
+        return seed + "_" + std::to_string(generated++);
+    }
+
+    std::string addNode(const std::string& op, const std::string& label, const int start, const int end, const std::optional<double> literal = std::nullopt)
+    {
+        auto id = makeId(op);
+        graph.nodes.push_back({ id, op, label, literal });
+        syncMap.addRange(id, start, end);
+        return id;
+    }
+
+    void connect(const std::string& from, const std::string& to, const int port)
+    {
+        graph.edges.push_back({ from, to, port });
+    }
+};
+
+std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl)
+{
+    switch (expr.kind)
+    {
+        case ExprKind::number:
+        {
+            const auto value = std::strtod(expr.text.c_str(), nullptr);
+            return ctx.addNode("constant", expr.text, expr.start, expr.end, value);
+        }
+        case ExprKind::symbol:
+        {
+            if (ctx.bindingToNode.contains(expr.text))
+                return ctx.bindingToNode[expr.text];
+
+            const auto op = forceControl ? "control" : "input";
+            auto id = ctx.addNode(op, expr.text, expr.start, expr.end);
+            ctx.bindingToNode[expr.text] = id;
+            return id;
+        }
+        case ExprKind::controlRate:
+        {
+            if (expr.args.empty() || expr.args[0] == nullptr)
+                return ctx.addNode("control", "control", expr.start, expr.end);
+            return compileExpr(ctx, *expr.args[0], true);
+        }
+        case ExprKind::binary:
+        {
+            const auto lhs = compileExpr(ctx, *expr.args[0], forceControl);
+            const auto rhs = compileExpr(ctx, *expr.args[1], forceControl);
+            std::string op = "add";
+            if (expr.op == "-")
+                op = "sub";
+            else if (expr.op == "*")
+                op = "mul";
+            else if (expr.op == "/")
+                op = "div";
+            const auto id = ctx.addNode(op, expr.op, expr.start, expr.end);
+            ctx.connect(lhs, id, 0);
+            ctx.connect(rhs, id, 1);
+            return id;
+        }
+        case ExprKind::call:
+        {
+            const auto id = ctx.addNode(expr.text, expr.text, expr.start, expr.end);
+            for (int i = 0; i < static_cast<int>(expr.args.size()); ++i)
+            {
+                const auto arg = compileExpr(ctx, *expr.args[static_cast<size_t>(i)], forceControl);
+                ctx.connect(arg, id, i);
+            }
+            return id;
+        }
+        case ExprKind::pipeline:
+        {
+            const auto source = compileExpr(ctx, *expr.args[0], forceControl);
+            const auto& rhs = *expr.args[1];
+            if (rhs.kind != ExprKind::call)
+            {
+                ctx.diagnostics.push_back({ "Pipeline RHS must be a call.", rhs.start, rhs.end });
+                return source;
+            }
+            const auto id = ctx.addNode(rhs.text, rhs.text, expr.start, expr.end);
+            ctx.connect(source, id, 0);
+            for (int i = 0; i < static_cast<int>(rhs.args.size()); ++i)
+            {
+                const auto arg = compileExpr(ctx, *rhs.args[static_cast<size_t>(i)], forceControl);
+                ctx.connect(arg, id, i + 1);
+            }
+            return id;
+        }
+    }
+    return ctx.addNode("input", "input", expr.start, expr.end);
+}
+
+bool replaceNodeId(ir::Graph& g, sync::SyncMap& map, const std::string& oldId, const std::string& newId)
+{
+    if (oldId == newId)
+        return true;
+    if (g.findNode(newId) != nullptr)
+        return false;
+    if (auto* n = g.findNode(oldId); n != nullptr)
+        n->id = newId;
+    else
+        return false;
+    for (auto& e : g.edges)
+    {
+        if (e.fromNodeId == oldId)
+            e.fromNodeId = newId;
+        if (e.toNodeId == oldId)
+            e.toNodeId = newId;
+    }
+    for (auto& b : g.bindings)
+        if (b.second == oldId)
+            b.second = newId;
+    auto ranges = map.ranges();
+    map.clear();
+    for (const auto& r : ranges)
+        map.addRange(r.nodeId == oldId ? newId : r.nodeId, r.start, r.end);
+    return true;
+}
+
+std::vector<const ir::Edge*> inputEdgesFor(const ir::Graph& graph, const std::string& nodeId)
+{
+    std::vector<const ir::Edge*> edges;
+    for (const auto& e : graph.edges)
+        if (e.toNodeId == nodeId)
+            edges.push_back(&e);
+    std::sort(edges.begin(), edges.end(), [](const auto* a, const auto* b) { return a->toPort < b->toPort; });
+    return edges;
+}
+
+std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::unordered_map<std::string, std::string>& memo)
+{
+    if (memo.contains(nodeId))
+        return memo[nodeId];
+    const auto* node = graph.findNode(nodeId);
+    if (node == nullptr)
+        return "0";
+
+    const auto ins = inputEdgesFor(graph, nodeId);
+    if (node->op == "constant")
+    {
+        std::ostringstream s;
+        s << (node->literal.has_value() ? *node->literal : 0.0);
+        memo[nodeId] = s.str();
+        return memo[nodeId];
+    }
+    if (node->op == "input" || node->op == "control")
+    {
+        memo[nodeId] = node->label;
+        return memo[nodeId];
+    }
+    if ((node->op == "add" || node->op == "sub" || node->op == "mul" || node->op == "div") && ins.size() >= 2)
+    {
+        const auto a = exprForNode(graph, ins[0]->fromNodeId, memo);
+        const auto b = exprForNode(graph, ins[1]->fromNodeId, memo);
+        const auto symbol = node->op == "add" ? "+" : node->op == "sub" ? "-" : node->op == "mul" ? "*" : "/";
+        memo[nodeId] = "(" + a + " " + symbol + " " + b + ")";
+        return memo[nodeId];
+    }
+
+    std::string line = node->op + "(";
+    for (size_t i = 0; i < ins.size(); ++i)
+    {
+        line += exprForNode(graph, ins[i]->fromNodeId, memo);
+        if (i + 1 < ins.size())
+            line += ", ";
+    }
+    line += ")";
+    memo[nodeId] = line;
+    return memo[nodeId];
+}
+
+std::string structureSignature(const ir::Graph& graph,
+                               const std::string& nodeId,
+                               std::unordered_map<std::string, std::string>& memo,
+                               std::unordered_set<std::string>& inFlight)
+{
+    if (memo.contains(nodeId))
+        return memo[nodeId];
+    if (inFlight.contains(nodeId))
+        return "cycle:" + nodeId;
+
+    const auto* node = graph.findNode(nodeId);
+    if (node == nullptr)
+        return "missing";
+
+    inFlight.insert(nodeId);
+    auto s = node->op;
+    if (node->op == "constant")
+        s += ":" + std::to_string(node->literal.value_or(0.0));
+    else if (node->op == "input" || node->op == "control")
+        s += ":" + node->label;
+
+    const auto inputs = inputEdgesFor(graph, nodeId);
+    s += "(";
+    for (size_t i = 0; i < inputs.size(); ++i)
+    {
+        s += std::to_string(inputs[i]->toPort) + "=" + structureSignature(graph, inputs[i]->fromNodeId, memo, inFlight);
+        if (i + 1 < inputs.size())
+            s += ",";
+    }
+    s += ")";
+    inFlight.erase(nodeId);
+    memo[nodeId] = s;
+    return s;
+}
+
+void preserveStableNodeIds(const ir::Graph& previous, ir::Graph& next, sync::SyncMap& map)
+{
+    std::unordered_set<std::string> usedOld;
+
+    // Strongest hint: same binding name should keep prior root node identity.
+    for (const auto& [binding, nextId] : next.bindings)
+    {
+        if (!previous.bindings.contains(binding))
+            continue;
+        const auto& oldId = previous.bindings.at(binding);
+        if (usedOld.contains(oldId))
+            continue;
+        if (replaceNodeId(next, map, nextId, oldId))
+            usedOld.insert(oldId);
+    }
+
+    std::unordered_map<std::string, std::string> prevSigMemo;
+    std::unordered_map<std::string, std::string> nextSigMemo;
+    std::unordered_set<std::string> prevFlight;
+    std::unordered_set<std::string> nextFlight;
+
+    std::unordered_map<std::string, std::vector<std::string>> prevBySignature;
+    for (const auto& n : previous.nodes)
+    {
+        if (usedOld.contains(n.id))
+            continue;
+        prevBySignature[structureSignature(previous, n.id, prevSigMemo, prevFlight)].push_back(n.id);
+    }
+
+    for (const auto& n : next.nodes)
+    {
+        const auto sig = structureSignature(next, n.id, nextSigMemo, nextFlight);
+        if (!prevBySignature.contains(sig))
+            continue;
+        auto& candidates = prevBySignature[sig];
+        while (!candidates.empty() && usedOld.contains(candidates.back()))
+            candidates.pop_back();
+        if (candidates.empty())
+            continue;
+        const auto oldId = candidates.back();
+        if (replaceNodeId(next, map, n.id, oldId))
+            usedOld.insert(oldId);
+    }
+}
+} // namespace
+
+CompileResult compile(const std::string& source, const ir::Graph* previousGraph)
+{
+    CompileResult result;
+    Lexer lexer(source);
+    Parser parser(lexer.lex());
+    auto stmts = parser.parse();
+    result.diagnostics = parser.diagnostics();
+
+    CompileContext ctx;
+
+    for (const auto& stmt : stmts)
+    {
+        if (stmt.expr == nullptr)
+            continue;
+        const auto root = compileExpr(ctx, *stmt.expr, false);
+
+        if (!stmt.binding.empty())
+        {
+            ctx.bindingToNode[stmt.binding] = root;
+            ctx.graph.bindings[stmt.binding] = root;
+        }
+    }
+
+    // Ensure explicit out call exists for audio output by creating one from last binding if missing.
+    bool hasOut = false;
+    for (const auto& n : ctx.graph.nodes)
+        if (n.op == "out")
+            hasOut = true;
+
+    if (!hasOut && !ctx.graph.bindings.empty())
+    {
+        const auto& fallback = ctx.graph.bindings.begin()->second;
+        const auto bus = ctx.addNode("constant", "0", 0, 0, 0.0);
+        const auto out = ctx.addNode("out", "out", 0, 0);
+        ctx.connect(bus, out, 0);
+        ctx.connect(fallback, out, 1);
+    }
+
+    if (previousGraph != nullptr)
+        preserveStableNodeIds(*previousGraph, ctx.graph, ctx.syncMap);
+
+    for (const auto& issue : ir::validateGraph(ctx.graph))
+        ctx.diagnostics.push_back({ issue.message, 0, 0 });
+
+    result.graph = std::move(ctx.graph);
+    result.syncMap = std::move(ctx.syncMap);
+    result.diagnostics.insert(result.diagnostics.end(), ctx.diagnostics.begin(), ctx.diagnostics.end());
+    result.prettyPrinted = prettyPrint(result.graph);
+    return result;
+}
+
+std::string prettyPrint(const ir::Graph& graph)
+{
+    std::ostringstream out;
+
+    std::vector<std::pair<std::string, std::string>> bindings;
+    for (const auto& b : graph.bindings)
+        bindings.push_back(b);
+    std::sort(bindings.begin(), bindings.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    std::unordered_map<std::string, std::string> memo;
+    for (const auto& [name, nodeId] : bindings)
+        out << name << " = " << exprForNode(graph, nodeId, memo) << ";\n";
+
+    for (const auto& n : graph.nodes)
+    {
+        if (n.op != "out")
+            continue;
+        const auto ins = inputEdgesFor(graph, n.id);
+        if (ins.size() >= 2)
+            out << "out(" << exprForNode(graph, ins[0]->fromNodeId, memo) << ", " << exprForNode(graph, ins[1]->fromNodeId, memo) << ");\n";
+    }
+    return out.str();
+}
+} // namespace duodsp::text
