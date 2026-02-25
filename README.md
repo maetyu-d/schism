@@ -1,6 +1,6 @@
 # Schism (JUCE MVP)
 
-"There is no sin, no amount of evil, which should be permitted to dissolve or break the bond of unity. For love can do all things, and nothing is difficult to those who are united." - Martin Luther (1519), in a letter to Pope Leo X
+> "There is no sin, no amount of evil, which should be permitted to dissolve or break the bond of unity. For love can do all things, and nothing is difficult to those who are united." - Martin Luther (1519), in a letter to Pope Leo X
 
 Part in-joke, part functional prototype, Schism is a dual-view DSP environment developed in JUCE, aimed at people who love Pd while their friends love SuperCollider (or vice versa). Its central premise is that it provides two simultaneous, real-time views of a single canonical internal model—and thus permanently resolves the perpetual visual-versus-text audio language beef. On the left is a visual graph (a Pd-style patch canvas); on the right is a text-based graph language editor with SC-inspired syntax. Peace is finally achieved.
 
