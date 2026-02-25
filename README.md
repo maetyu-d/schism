@@ -1,4 +1,4 @@
-# Schism (JUCE MVP)
+# Schism
 
 > "There is no sin, no amount of evil, which should be permitted to dissolve or break the bond of unity. For love can do all things, and nothing is difficult to those who are united." - Martin Luther (1519), in a letter to Pope Leo X
 
