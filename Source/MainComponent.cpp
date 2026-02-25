@@ -588,6 +588,16 @@ void MainComponent::timerCallback()
         spectrumWidget.setBins(runtime.getSpectrumSnapshot(48));
     else
         spectrumWidget.setBins(runtime.getSpectrumSnapshotForProbe(spectrumProbe, 48));
+
+    const auto floatValues = runtime.getFloatatomValues();
+    const auto hasFloatatom = std::any_of(currentGraph.nodes.begin(), currentGraph.nodes.end(), [](const auto& n)
+    {
+        return n.op == "floatatom";
+    });
+    if (!hasFloatatom)
+        graphCanvas.setFloatatomLiveValues({});
+    else if (!floatValues.empty())
+        graphCanvas.setFloatatomLiveValues(floatValues);
 }
 
 void MainComponent::setCodeContent(const juce::String& content, const bool queueCompile)

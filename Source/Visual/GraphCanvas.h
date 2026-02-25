@@ -32,6 +32,7 @@ public:
     bool deleteSelection();
     bool hasAnySelection() const;
     void beginInlineEdit(const std::string& nodeId);
+    void setFloatatomLiveValues(const std::unordered_map<std::string, float>& values);
 
     std::function<void(const std::string&)> onNodeSelectionChanged;
     std::function<void(const std::string&, juce::Point<float>)> onAddNodeRequested;
@@ -56,6 +57,7 @@ public:
     void mouseMove(const juce::MouseEvent& event) override;
     void mouseDoubleClick(const juce::MouseEvent& event) override;
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+    bool keyStateChanged(bool isKeyDown) override;
 
 private:
     void timerCallback() override;
@@ -114,8 +116,11 @@ private:
     std::unordered_set<std::string> marqueeBaseSelection;
 
     bool panning = false;
+    bool spacePanHeld = false;
+    bool pendingContextMenu = false;
     juce::Point<float> panDragStartMouse;
     juce::Point<float> panDragStartOffset;
+    juce::Point<float> contextMenuMouseDown;
 
     std::optional<size_t> connectFromNode;
     juce::Point<float> liveMouse;
@@ -130,5 +135,6 @@ private:
     juce::TextEditor inlineEditor;
     std::optional<std::string> editingNodeId;
     std::unordered_map<std::string, double> bangFlashUntilMs;
+    std::unordered_map<std::string, float> floatatomLiveValues;
 };
 } // namespace duodsp::visual

@@ -450,6 +450,60 @@ void testBangNode()
     require(firstPulse >= 430 && firstPulse <= 510, "delay should postpone bang pulse by roughly 10ms at 48k.");
 }
 
+void testMessageSetsFloatatom()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "trig", "constant", "1", 1.0 });
+    g.nodes.push_back({ "m", "msg", "250", std::nullopt });
+    g.nodes.push_back({ "f", "floatatom", "0", 0.0 });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "trig", "m", 0 });
+    g.edges.push_back({ "m", "f", 0 });
+    g.edges.push_back({ "f", "out", 0 });
+    g.edges.push_back({ "f", "out", 1 });
+    engine.setGraph(g);
+
+    juce::AudioBuffer<float> buffer(2, 64);
+    engine.processBlock(buffer);
+    require(std::abs(buffer.getSample(0, 63) - 250.0f) < 0.01f, "message should set floatatom value when banged.");
+
+    duodsp::dsp::RuntimeEngine clickEngine;
+    clickEngine.prepare(48000.0, 64, 2);
+    clickEngine.setCrossfadeTimeMs(0.0);
+    duodsp::ir::Graph gClick;
+    gClick.nodes.push_back({ "m", "msg", "72", std::nullopt });
+    gClick.nodes.push_back({ "f", "floatatom", "0", 0.0 });
+    gClick.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    gClick.edges.push_back({ "m", "f", 0 });
+    gClick.edges.push_back({ "f", "out", 0 });
+    gClick.edges.push_back({ "f", "out", 1 });
+    clickEngine.setGraph(gClick);
+    clickEngine.triggerBang("m");
+    clickEngine.processBlock(buffer);
+    require(std::abs(buffer.getSample(0, 63) - 72.0f) < 0.01f, "click-banged message should set floatatom value.");
+
+    duodsp::dsp::RuntimeEngine bangChainEngine;
+    bangChainEngine.prepare(48000.0, 64, 2);
+    bangChainEngine.setCrossfadeTimeMs(0.0);
+    duodsp::ir::Graph gChain;
+    gChain.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    gChain.nodes.push_back({ "m", "msg", "72", std::nullopt });
+    gChain.nodes.push_back({ "f", "floatatom", "0", 0.0 });
+    gChain.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    gChain.edges.push_back({ "b", "m", 0 });
+    gChain.edges.push_back({ "m", "f", 0 });
+    gChain.edges.push_back({ "f", "out", 0 });
+    gChain.edges.push_back({ "f", "out", 1 });
+    bangChainEngine.setGraph(gChain);
+    bangChainEngine.triggerBang("b");
+    bangChainEngine.processBlock(buffer);
+    require(std::abs(buffer.getSample(0, 63) - 72.0f) < 0.01f, "bang->msg->floatatom chain should output 72.");
+}
+
 void testNewFilterDelayCodeRoundTrip()
 {
     const std::string source =
@@ -635,6 +689,7 @@ int main(int argc, char** argv)
         { "label_defaults", &testLabelDefaultsForNodes },
         { "sample_hold", &testSampleAndHoldNode },
         { "bang_node", &testBangNode },
+        { "msg_floatatom", &testMessageSetsFloatatom },
         { "filter_delay_code", &testNewFilterDelayCodeRoundTrip },
         { "code_aliases", &testCodePanelUsesDisplayAliases },
         { "code_params", &testCodeViewDisplaysNodeParameters },

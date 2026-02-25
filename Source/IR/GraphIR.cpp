@@ -27,11 +27,11 @@ OpSpec opSpecFor(const std::string& op)
     if (op == "constant")
         return { PortRate::control, {} };
     if (op == "floatatom")
-        return { PortRate::control, {} };
+        return { PortRate::control, { { "in", PortRate::control, true } }, 0 };
     if (op == "bang")
         return { PortRate::control, { { "trig", PortRate::any, true } }, 0 };
     if (op == "msg")
-        return { PortRate::event, {} };
+        return { PortRate::control, { { "trig", PortRate::any, true } }, 0 };
     if (op == "obj")
         return { PortRate::audio, { { "in", PortRate::audio, true } }, 0 };
     if (op == "input")

@@ -109,6 +109,8 @@ std::unique_ptr<RuntimeEngine::CompiledGraph> RuntimeEngine::compileGraph(const 
         if (rn.node.op == "cadd" || rn.node.op == "csub" || rn.node.op == "cmul" || rn.node.op == "cdiv" || rn.node.op == "comp"
             || rn.node.op == "and" || rn.node.op == "or" || rn.node.op == "xor" || rn.node.op == "min" || rn.node.op == "max")
             rn.stateB = std::numeric_limits<float>::quiet_NaN(); // last hot input for Pd-like hot/cold behavior
+        if (rn.node.op == "floatatom")
+            rn.stateB = std::numeric_limits<float>::quiet_NaN(); // lazy-init marker for stored value
         if (rn.node.op == "delay" || rn.node.op == "cdelay" || rn.node.op == "comb" || rn.node.op == "apf")
         {
             const auto maxDelaySamples = juce::jmax(64, static_cast<int>(std::round(currentSampleRate * 5.0)));
@@ -268,6 +270,8 @@ void RuntimeEngine::triggerBang(const std::string& nodeId)
     auto& n = currentGraph->nodes[currentGraph->indexByNodeId[nodeId]];
     if (n.node.op == "bang")
         n.stateA = 1.0f;
+    else if (n.node.op == "msg")
+        n.stateC = 1.0f;
 }
 
 std::vector<std::string> RuntimeEngine::consumeTriggeredBangIds()
@@ -311,9 +315,28 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
     if (n.node.op == "constant")
         return static_cast<float>(n.node.literal.value_or(0.0));
     if (n.node.op == "floatatom")
-        return static_cast<float>(n.node.literal.value_or(0.0));
+    {
+        if (!std::isfinite(n.stateB))
+        {
+            n.stateA = static_cast<float>(n.node.literal.value_or(0.0));
+            n.stateB = 0.0f;
+        }
+        const auto hasInput = !n.inputIndices.empty() && n.inputIndices[0] >= 0;
+        if (hasInput)
+            n.stateA = inputAt(0, n.stateA);
+        return n.stateA;
+    }
     if (n.node.op == "msg")
-        return 0.0f;
+    {
+        const auto trigIn = inputAt(0, 0.0f);
+        const auto rising = trigIn > 0.5f && n.stateB <= 0.5f;
+        const auto clicked = n.stateC > 0.5f;
+        n.stateB = trigIn;
+        n.stateC = 0.0f;
+        if (rising || clicked)
+            n.stateA = defaultAt(0, 0.0f);
+        return n.stateA;
+    }
     if (n.node.op == "bang")
     {
         const auto trigIn = inputAt(0, 0.0f);
@@ -836,5 +859,24 @@ std::vector<float> RuntimeEngine::getSpectrumSnapshotForProbe(const std::string&
                                           spectrumProbeWriteIndices.contains(probeNodeId) ? spectrumProbeWriteIndices.at(probeNodeId) : 0,
                                           1024);
     return spectrumFromSamples(samples, bins);
+}
+
+std::unordered_map<std::string, float> RuntimeEngine::getFloatatomValues() const
+{
+    std::unordered_map<std::string, float> out;
+    const juce::ScopedTryLock lock(graphLock);
+    if (!lock.isLocked() || currentGraph == nullptr)
+        return out;
+
+    for (const auto& n : currentGraph->nodes)
+    {
+        if (n.node.op != "floatatom")
+            continue;
+        auto v = n.stateA;
+        if (!std::isfinite(v))
+            v = static_cast<float>(n.node.literal.value_or(0.0));
+        out[n.node.id] = v;
+    }
+    return out;
 }
 } // namespace duodsp::dsp

@@ -31,6 +31,7 @@ public:
     std::vector<std::string> getSpectrumProbeIds() const;
     std::vector<float> getScopeSnapshotForProbe(const std::string& probeNodeId, size_t maxSamples) const;
     std::vector<float> getSpectrumSnapshotForProbe(const std::string& probeNodeId, size_t bins) const;
+    std::unordered_map<std::string, float> getFloatatomValues() const;
 
 private:
     struct RuntimeNode

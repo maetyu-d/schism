@@ -12,12 +12,19 @@ namespace
 constexpr float pdBaseFontSize = 13.0f;
 constexpr float minNodeWidth = 36.0f;
 constexpr float nodeHeight = 18.0f;
-constexpr float portHalf = 4.2f;
+constexpr float nonBangNodeScale = 1.10f;
+constexpr float messageNodeScale = 1.20f;
+constexpr float regularNodeHeight = nodeHeight * nonBangNodeScale;
+constexpr float regularMinNodeWidth = minNodeWidth * nonBangNodeScale;
+constexpr float portScale = 1.15f;
+constexpr float portHalf = 4.2f * portScale;
 constexpr float minHit = 5.0f;
-constexpr float portHitRadiusPx = 16.0f;
-constexpr float outputHitRadiusPx = 16.0f;
+constexpr float portHitRadiusPx = 16.0f * portScale;
+constexpr float outputHitRadiusPx = 16.0f * portScale;
 constexpr float cableHitRadiusPx = 6.0f;
 constexpr float canvasInset = 0.0f;
+constexpr float bangClickMaxTravelPx = 6.0f;
+constexpr float bangDragStartPx = 4.0f;
 
 juce::Font pdFont(const float size)
 {
@@ -306,8 +313,11 @@ void GraphCanvas::rebuildVisuals(const std::unordered_map<std::string, juce::Poi
 
         const auto textWidth = static_cast<float>(measureFont.getStringWidth(v.displayText)) + 8.0f;
         const auto bangSize = nodeHeight * 2.0f;
-        const auto w = v.style == NodeStyle::bang ? bangSize : juce::jmax(minNodeWidth, textWidth);
-        const auto h = v.style == NodeStyle::bang ? bangSize : nodeHeight;
+        const auto isMessage = v.style == NodeStyle::message;
+        const auto textScale = isMessage ? nonBangNodeScale * messageNodeScale : nonBangNodeScale;
+        const auto hScale = isMessage ? messageNodeScale : 1.0f;
+        const auto w = v.style == NodeStyle::bang ? bangSize : juce::jmax(regularMinNodeWidth, textWidth * textScale);
+        const auto h = v.style == NodeStyle::bang ? bangSize : regularNodeHeight * hScale;
         v.bounds = juce::Rectangle<float>(pos.x, pos.y, w, h);
 
         const auto spec = ir::opSpecFor(v.node.op);
@@ -426,6 +436,12 @@ bool GraphCanvas::hasAnySelection() const
     return !selectedNodeIds.empty() || !selectedEdges.empty();
 }
 
+void GraphCanvas::setFloatatomLiveValues(const std::unordered_map<std::string, float>& values)
+{
+    floatatomLiveValues = values;
+    repaint();
+}
+
 std::optional<size_t> GraphCanvas::indexForNodeId(const std::string& nodeId) const
 {
     for (size_t i = 0; i < visuals.size(); ++i)
@@ -542,8 +558,7 @@ void GraphCanvas::paint(juce::Graphics& g)
         }
         else if (visual.style == NodeStyle::message)
         {
-            const auto isBang = visual.node.op == "bang";
-            const auto isBangLit = isBang && bangFlashUntilMs.contains(visual.node.id) && bangFlashUntilMs[visual.node.id] > nowMs;
+            const auto isBangLit = bangFlashUntilMs.contains(visual.node.id) && bangFlashUntilMs[visual.node.id] > nowMs;
             juce::Path msg;
             msg.startNewSubPath(rect.getX(), rect.getY());
             msg.lineTo(rect.getRight() - 7.0f, rect.getY());
@@ -584,9 +599,12 @@ void GraphCanvas::paint(juce::Graphics& g)
             g.setColour(juce::Colours::black);
             const auto scaledFont = pdFont(juce::jlimit(10.0f, 24.0f, pdBaseFontSize * zoom));
             g.setFont(scaledFont);
+            auto text = visual.displayText;
+            if (visual.style == NodeStyle::floatatom && floatatomLiveValues.contains(visual.node.id))
+                text = juce::String(floatatomLiveValues.at(visual.node.id), 3);
             const auto textPadX = juce::jmax(2, static_cast<int>(std::round(3.0f * zoom)));
             const auto textPadY = juce::jmax(0, static_cast<int>(std::round(1.0f * zoom)));
-            g.drawFittedText(visual.displayText, rect.getSmallestIntegerContainer().reduced(textPadX, textPadY), juce::Justification::centredLeft, 1);
+            g.drawFittedText(text, rect.getSmallestIntegerContainer().reduced(textPadX, textPadY), juce::Justification::centredLeft, 1);
         }
 
         for (int port = 0; port < static_cast<int>(visual.inputRates.size()); ++port)
@@ -1050,14 +1068,21 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
 
     if (event.mods.isRightButtonDown())
     {
-        showPutPopup(event.position);
+        pendingContextMenu = true;
+        contextMenuMouseDown = event.position;
+        panning = false;
+        panDragStartMouse = event.position;
+        panDragStartOffset = panOffset;
         return;
     }
 
-    if (event.mods.isMiddleButtonDown() || event.mods.isAltDown())
+    if (event.mods.isMiddleButtonDown() || event.mods.isAltDown() || (spacePanHeld && event.mods.isLeftButtonDown()))
     {
         pendingDragNode.reset();
         pendingMarqueeStart = false;
+        pendingFloatatomEdit = false;
+        pendingFloatatomNodeId.clear();
+        pendingBangNodeId.clear();
         panning = true;
         panDragStartMouse = event.position;
         panDragStartOffset = panOffset;
@@ -1091,9 +1116,12 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
         auto& visual = visuals[*hit];
         const auto inPortHit = hitInputPort(visual, event.position).has_value();
         const auto outPortHit = hitOutputPort(visual, event.position);
+        const auto strictInHitForFloat = !visual.inputRates.empty()
+                                             && inputPortPosition(visual, 0).getDistanceFrom(event.position) <= juce::jmax(2.0f, portHalf * zoom * 1.25f);
         const auto strictOutHitForFloat = outputPortPosition(visual).getDistanceFrom(event.position) <= juce::jmax(2.0f, portHalf * zoom * 1.25f);
+        const auto outPortConnectHit = (visual.style == NodeStyle::floatatom) ? strictOutHitForFloat : outPortHit;
 
-        if (outPortHit)
+        if (outPortConnectHit)
         {
             pendingDragNode.reset();
             pendingMarqueeStart = false;
@@ -1132,10 +1160,10 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
             if (selectedNodeIds.contains(v.node.id))
                 dragStartPositions[v.node.id] = v.bounds.getPosition();
 
-        pendingFloatatomEdit = (visual.style == NodeStyle::floatatom && !inPortHit && !strictOutHitForFloat);
+        pendingFloatatomEdit = (visual.style == NodeStyle::floatatom && !strictInHitForFloat && !strictOutHitForFloat);
         pendingFloatatomNodeId = visual.node.id;
         pendingFloatatomMouseDown = event.position;
-        if (visual.node.op == "bang" && !inPortHit && !outPortHit)
+        if ((visual.node.op == "bang" || visual.node.op == "msg") && !inPortHit && !outPortConnectHit)
         {
             pendingBangNodeId = visual.node.id;
             pendingBangMouseDown = event.position;
@@ -1164,6 +1192,12 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
 {
     liveMouse = event.position;
 
+    if (pendingContextMenu && !panning)
+    {
+        if (event.position.getDistanceFrom(contextMenuMouseDown) > 3.0f)
+            panning = true;
+    }
+
     if (panning)
     {
         panOffset = panDragStartOffset + (event.position - panDragStartMouse);
@@ -1173,7 +1207,10 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
 
     if (pendingDragNode.has_value() && !draggingNode.has_value())
     {
-        if (event.getDistanceFromDragStart() > 2)
+        auto dragThreshold = 2;
+        if (!pendingBangNodeId.empty())
+            dragThreshold = static_cast<int>(std::ceil(bangDragStartPx));
+        if (event.getDistanceFromDragStart() > dragThreshold)
         {
             draggingNode = pendingDragNode;
             pendingDragNode.reset();
@@ -1237,6 +1274,17 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
 void GraphCanvas::mouseUp(const juce::MouseEvent& event)
 {
     liveMouse = event.position;
+
+    if (pendingContextMenu)
+    {
+        const auto dragged = event.position.getDistanceFrom(contextMenuMouseDown) > 3.0f;
+        pendingContextMenu = false;
+        panning = false;
+        if (!dragged)
+            showPutPopup(event.position);
+        return;
+    }
+
     panning = false;
     draggingNode.reset();
     pendingDragNode.reset();
@@ -1273,7 +1321,7 @@ void GraphCanvas::mouseUp(const juce::MouseEvent& event)
     connectFromNode.reset();
     if (pendingFloatatomEdit && !pendingFloatatomNodeId.empty() && event.position.getDistanceFrom(pendingFloatatomMouseDown) <= 2.0f)
         beginInlineEdit(pendingFloatatomNodeId);
-    if (!pendingBangNodeId.empty() && event.position.getDistanceFrom(pendingBangMouseDown) <= 2.0f && onBangTriggered != nullptr)
+    if (!pendingBangNodeId.empty() && event.position.getDistanceFrom(pendingBangMouseDown) <= bangClickMaxTravelPx && onBangTriggered != nullptr)
     {
         bangFlashUntilMs[pendingBangNodeId] = juce::Time::getMillisecondCounterHiRes() + 120.0;
         startTimerHz(60);
@@ -1333,6 +1381,13 @@ void GraphCanvas::mouseWheelMove(const juce::MouseEvent& event, const juce::Mous
     panOffset.x = event.position.x - c.getX() - worldAtCursor.x * zoom;
     panOffset.y = event.position.y - c.getY() - worldAtCursor.y * zoom;
     repaint();
+}
+
+bool GraphCanvas::keyStateChanged(const bool isKeyDown)
+{
+    juce::ignoreUnused(isKeyDown);
+    spacePanHeld = juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey);
+    return false;
 }
 
 void GraphCanvas::timerCallback()
