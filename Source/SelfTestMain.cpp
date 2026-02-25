@@ -171,6 +171,22 @@ void testCycleRule()
     require(fixed.empty(), "Cycle with delay1 break should be accepted.");
 }
 
+void testPrettyPrintCycleSafety()
+{
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "k", "cadd", "+", std::nullopt });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "k", "k", 0 });
+    g.edges.push_back({ "k", "k", 1 });
+    g.edges.push_back({ "k", "out", 0 });
+    g.edges.push_back({ "k", "out", 1 });
+    g.bindings["n1"] = "k";
+
+    const auto printed = duodsp::text::prettyPrint(g);
+    require(!printed.empty(), "Pretty print should not crash or return empty text for cyclic graph.");
+    require(printed.find("dac~(") != std::string::npos, "Pretty print should still emit dac~ line for cyclic graph.");
+}
+
 void testTypedPortValidation()
 {
     duodsp::ir::Graph g;
@@ -612,6 +628,7 @@ int main(int argc, char** argv)
         { "stable_node_ids", &testStableNodeIds },
         { "hot_swap_crossfade", &testHotSwapCrossfade },
         { "cycle_rule", &testCycleRule },
+        { "pretty_cycle_safety", &testPrettyPrintCycleSafety },
         { "typed_ports", &testTypedPortValidation },
         { "probe_targeting", &testProbeTargeting },
         { "control_math_code", &testControlMathCodeRoundTrip },

@@ -1,6 +1,7 @@
 #include "GraphCanvas.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <unordered_map>
 
@@ -691,6 +692,31 @@ void GraphCanvas::resized() {}
 
 bool GraphCanvas::keyPressed(const juce::KeyPress& key)
 {
+    if (key == juce::KeyPress('c', juce::ModifierKeys::commandModifier, 0))
+    {
+        if (onCopyRequested != nullptr)
+            onCopyRequested();
+        return true;
+    }
+    if (key == juce::KeyPress('x', juce::ModifierKeys::commandModifier, 0))
+    {
+        if (onCutRequested != nullptr)
+            onCutRequested();
+        return true;
+    }
+    if (key == juce::KeyPress('v', juce::ModifierKeys::commandModifier, 0))
+    {
+        if (onPasteRequested != nullptr)
+            onPasteRequested();
+        return true;
+    }
+    if (key == juce::KeyPress('a', juce::ModifierKeys::commandModifier, 0))
+    {
+        if (onSelectAllRequested != nullptr)
+            onSelectAllRequested();
+        return true;
+    }
+
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
         if (deleteSelection())

@@ -42,6 +42,10 @@ public:
     std::function<void(const std::string&, juce::Point<float>)> onNodeMoved;
     std::function<void(const std::string&, const std::string&)> onNodeTextEditRequested;
     std::function<void(const std::string&)> onBangTriggered;
+    std::function<void()> onCopyRequested;
+    std::function<void()> onCutRequested;
+    std::function<void()> onPasteRequested;
+    std::function<void()> onSelectAllRequested;
 
     void paint(juce::Graphics& g) override;
     void resized() override;

@@ -803,13 +803,23 @@ void sanitizeGraphReferences(ir::Graph& graph)
     }
 }
 
-std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::unordered_map<std::string, std::string>& memo)
+std::string exprForNodeImpl(const ir::Graph& graph,
+                            const std::string& nodeId,
+                            std::unordered_map<std::string, std::string>& memo,
+                            std::unordered_set<std::string>& inFlight)
 {
     if (memo.contains(nodeId))
         return memo[nodeId];
+    if (inFlight.contains(nodeId))
+        return "0";
+
+    inFlight.insert(nodeId);
     const auto* node = graph.findNode(nodeId);
     if (node == nullptr)
+    {
+        inFlight.erase(nodeId);
         return "0";
+    }
 
     const auto ins = inputEdgesFor(graph, nodeId);
     if (node->op == "constant")
@@ -817,11 +827,13 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
         std::ostringstream s;
         s << (node->literal.has_value() ? *node->literal : 0.0);
         memo[nodeId] = s.str();
+        inFlight.erase(nodeId);
         return memo[nodeId];
     }
     if (node->op == "input" || node->op == "control")
     {
         memo[nodeId] = node->label;
+        inFlight.erase(nodeId);
         return memo[nodeId];
     }
     const auto spec = ir::opSpecFor(node->op);
@@ -854,7 +866,7 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
     {
         for (const auto* e : ins)
             if (e->toPort == port)
-                return exprForNode(graph, e->fromNodeId, memo);
+                return exprForNodeImpl(graph, e->fromNodeId, memo, inFlight);
         return defaultForPort(port);
     };
 
@@ -868,6 +880,7 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
             b = node->op == "mul" || node->op == "div" ? "1" : "0";
         const auto symbol = node->op == "add" ? "+" : node->op == "sub" ? "-" : node->op == "mul" ? "*" : "/";
         memo[nodeId] = "(" + a + " " + symbol + " " + b + ")";
+        inFlight.erase(nodeId);
         return memo[nodeId];
     }
 
@@ -889,7 +902,14 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
     }
     line += ")";
     memo[nodeId] = line;
+    inFlight.erase(nodeId);
     return memo[nodeId];
+}
+
+std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::unordered_map<std::string, std::string>& memo)
+{
+    std::unordered_set<std::string> inFlight;
+    return exprForNodeImpl(graph, nodeId, memo, inFlight);
 }
 
 std::string structureSignature(const ir::Graph& graph,

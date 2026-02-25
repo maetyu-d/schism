@@ -387,6 +387,10 @@ MainComponent::MainComponent()
     {
         runtime.triggerBang(nodeId);
     };
+    graphCanvas.onCopyRequested = [this] { editCopy(); };
+    graphCanvas.onCutRequested = [this] { editCut(); };
+    graphCanvas.onPasteRequested = [this] { editPaste(); };
+    graphCanvas.onSelectAllRequested = [this] { editSelectAll(); };
 
     codeDocument.addListener(this);
     codeEditor.setFont(juce::FontOptions("Menlo", 14.0f, juce::Font::plain));
@@ -433,40 +437,35 @@ void MainComponent::releaseResources() {}
 bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent)
 {
     juce::ignoreUnused(originatingComponent);
-    const auto mods = key.getModifiers();
-    if (mods.isCommandDown())
+    if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0))
     {
-        const auto code = static_cast<char>(std::tolower(key.getTextCharacter()));
-        if (code == 'z' && mods.isShiftDown())
-        {
-            redo();
-            return true;
-        }
-        if (code == 'z')
-        {
-            undo();
-            return true;
-        }
-        if (code == 'c')
-        {
-            editCopy();
-            return true;
-        }
-        if (code == 'x')
-        {
-            editCut();
-            return true;
-        }
-        if (code == 'v')
-        {
-            editPaste();
-            return true;
-        }
-        if (code == 'a')
-        {
-            editSelectAll();
-            return true;
-        }
+        redo();
+        return true;
+    }
+    if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0))
+    {
+        undo();
+        return true;
+    }
+    if (key == juce::KeyPress('c', juce::ModifierKeys::commandModifier, 0))
+    {
+        editCopy();
+        return true;
+    }
+    if (key == juce::KeyPress('x', juce::ModifierKeys::commandModifier, 0))
+    {
+        editCut();
+        return true;
+    }
+    if (key == juce::KeyPress('v', juce::ModifierKeys::commandModifier, 0))
+    {
+        editPaste();
+        return true;
+    }
+    if (key == juce::KeyPress('a', juce::ModifierKeys::commandModifier, 0))
+    {
+        editSelectAll();
+        return true;
     }
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
@@ -1062,10 +1061,7 @@ void MainComponent::editCopy()
 
     const auto selected = graphCanvas.getSelectedNodeIds();
     if (selected.empty())
-    {
-        graphCanvas.deleteSelection();
         return;
-    }
 
     std::unordered_set<std::string> selectedSet(selected.begin(), selected.end());
     NodeClipboard clip;
