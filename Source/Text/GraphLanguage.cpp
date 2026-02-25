@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <memory>
 #include <sstream>
@@ -514,7 +515,92 @@ std::string canonicalOpFromCallName(const std::string& name)
 {
     if (name == "dac~")
         return "out";
+    if (name == "osc~")
+        return "sin";
+    if (name == "phasor~")
+        return "saw";
+    if (name == "tri~")
+        return "tri";
+    if (name == "noise~")
+        return "noise";
+    if (name == "lop~")
+        return "lpf";
+    if (name == "hip~")
+        return "hpf";
+    if (name == "clip~")
+        return "clip";
+    if (name == "tanh~")
+        return "tanh";
+    if (name == "slew~")
+        return "slew";
+    if (name == "pow~")
+        return "pow";
+    if (name == "mod~")
+        return "mod";
     return name;
+}
+
+std::string displayCallNameFromOp(const std::string& op)
+{
+    if (op == "sin")
+        return "osc~";
+    if (op == "saw")
+        return "phasor~";
+    if (op == "tri")
+        return "tri~";
+    if (op == "noise")
+        return "noise~";
+    if (op == "lpf")
+        return "lop~";
+    if (op == "hpf")
+        return "hip~";
+    if (op == "clip")
+        return "clip~";
+    if (op == "tanh")
+        return "tanh~";
+    if (op == "slew")
+        return "slew~";
+    if (op == "pow")
+        return "pow~";
+    if (op == "mod")
+        return "mod~";
+    return op;
+}
+
+std::vector<double> parseLabelDefaults(const std::string& label)
+{
+    std::vector<double> vals;
+    if (label.empty())
+        return vals;
+
+    std::istringstream iss(label);
+    std::string tok;
+    if (!(iss >> tok))
+        return vals;
+
+    while (iss >> tok)
+    {
+        char* end = nullptr;
+        const auto v = std::strtod(tok.c_str(), &end);
+        if (end != tok.c_str() && end != nullptr && *end == '\0')
+            vals.push_back(v);
+    }
+
+    if (!vals.empty())
+        return vals;
+
+    char* end = nullptr;
+    const auto v = std::strtod(label.c_str(), &end);
+    if (end != label.c_str() && end != nullptr && *end == '\0')
+        vals.push_back(v);
+    return vals;
+}
+
+std::string formatDefaultNumber(const double v)
+{
+    std::ostringstream s;
+    s << v;
+    return s.str();
 }
 
 std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl)
@@ -669,20 +755,45 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
         memo[nodeId] = node->label;
         return memo[nodeId];
     }
-    if ((node->op == "add" || node->op == "sub" || node->op == "mul" || node->op == "div") && ins.size() >= 2)
+    const auto defaults = parseLabelDefaults(node->label);
+    auto argAt = [&](const int port) -> std::string
     {
-        const auto a = exprForNode(graph, ins[0]->fromNodeId, memo);
-        const auto b = exprForNode(graph, ins[1]->fromNodeId, memo);
+        for (const auto* e : ins)
+            if (e->toPort == port)
+                return exprForNode(graph, e->fromNodeId, memo);
+        if (port >= 0 && port < static_cast<int>(defaults.size()))
+            return formatDefaultNumber(defaults[static_cast<size_t>(port)]);
+        return {};
+    };
+
+    if ((node->op == "add" || node->op == "sub" || node->op == "mul" || node->op == "div") && (!argAt(0).empty() || !argAt(1).empty()))
+    {
+        auto a = argAt(0);
+        auto b = argAt(1);
+        if (a.empty())
+            a = "0";
+        if (b.empty())
+            b = node->op == "mul" || node->op == "div" ? "1" : "0";
         const auto symbol = node->op == "add" ? "+" : node->op == "sub" ? "-" : node->op == "mul" ? "*" : "/";
         memo[nodeId] = "(" + a + " " + symbol + " " + b + ")";
         return memo[nodeId];
     }
 
-    std::string line = node->op + "(";
-    for (size_t i = 0; i < ins.size(); ++i)
+    const auto spec = ir::opSpecFor(node->op);
+    const auto maxArgs = std::max(static_cast<int>(spec.inputs.size()), static_cast<int>(defaults.size()));
+    std::vector<std::string> args;
+    args.reserve(static_cast<size_t>(maxArgs));
+    for (int i = 0; i < maxArgs; ++i)
     {
-        line += exprForNode(graph, ins[i]->fromNodeId, memo);
-        if (i + 1 < ins.size())
+        auto a = argAt(i);
+        if (!a.empty())
+            args.push_back(a);
+    }
+    std::string line = displayCallNameFromOp(node->op) + "(";
+    for (size_t i = 0; i < args.size(); ++i)
+    {
+        line += args[i];
+        if (i + 1 < args.size())
             line += ", ";
     }
     line += ")";
@@ -833,21 +944,76 @@ std::string prettyPrint(const ir::Graph& graph)
         bindings.push_back(b);
     std::sort(bindings.begin(), bindings.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
-    std::unordered_map<std::string, std::string> memo;
+    auto isAutoBindingName = [](const std::string& name)
+    {
+        if (name.size() < 2 || name[0] != 'n')
+            return false;
+        for (size_t i = 1; i < name.size(); ++i)
+            if (!std::isdigit(static_cast<unsigned char>(name[i])))
+                return false;
+        return true;
+    };
+
+    std::unordered_set<std::string> boundIds;
     for (const auto& [name, nodeId] : bindings)
+        boundIds.insert(nodeId);
+
+    auto feedsAnotherBoundNode = [&](const std::string& nodeId)
+    {
+        for (const auto& e : graph.edges)
+            if (e.fromNodeId == nodeId && boundIds.contains(e.toNodeId))
+                return true;
+        return false;
+    };
+
+    std::unordered_map<std::string, std::string> memo;
+    std::unordered_map<std::string, std::string> emittedBindingByNodeId;
+    bool emittedAnyBinding = false;
+    for (const auto& [name, nodeId] : bindings)
+    {
+        if (isAutoBindingName(name) && feedsAnotherBoundNode(nodeId))
+            continue;
         out << name << " = " << exprForNode(graph, nodeId, memo) << ";\n";
+        emittedBindingByNodeId[nodeId] = name;
+        emittedAnyBinding = true;
+    }
+
+    // Fallback: if all bindings were pruned (e.g. all auto and chained), keep the final binding visible.
+    if (!emittedAnyBinding && !bindings.empty())
+    {
+        const auto& [name, nodeId] = bindings.back();
+        out << name << " = " << exprForNode(graph, nodeId, memo) << ";\n";
+        emittedBindingByNodeId[nodeId] = name;
+    }
+
+    auto refForNode = [&](const std::string& nodeId)
+    {
+        if (emittedBindingByNodeId.contains(nodeId))
+            return emittedBindingByNodeId.at(nodeId);
+        return exprForNode(graph, nodeId, memo);
+    };
 
     for (const auto& n : graph.nodes)
     {
         if (n.op != "out")
             continue;
         const auto ins = inputEdgesFor(graph, n.id);
-        if (ins.size() >= 2)
+        std::string busExpr = "0";
+        std::string sigExpr = "0";
+        bool sigConnected = false;
+        for (const auto* e : ins)
         {
-            const auto busExpr = exprForNode(graph, ins[0]->fromNodeId, memo);
-            const auto sigExpr = exprForNode(graph, ins[1]->fromNodeId, memo);
-            out << "dac~(" << busExpr << ", " << sigExpr << "); // dac signal <- " << sigExpr << "\n";
+            if (e->toPort == 0)
+                busExpr = refForNode(e->fromNodeId);
+            else if (e->toPort == 1)
+            {
+                sigExpr = refForNode(e->fromNodeId);
+                sigConnected = true;
+            }
         }
+
+        out << "dac~(" << busExpr << ", " << sigExpr << "); // dac signal <- "
+            << (sigConnected ? sigExpr : std::string("(unconnected)")) << "\n";
     }
     return out.str();
 }

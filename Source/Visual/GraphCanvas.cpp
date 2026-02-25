@@ -241,6 +241,15 @@ std::vector<std::string> GraphCanvas::getSelectedNodeIds() const
     return ids;
 }
 
+std::unordered_map<std::string, juce::Point<float>> GraphCanvas::getLayoutById() const
+{
+    std::unordered_map<std::string, juce::Point<float>> out;
+    out.reserve(visuals.size());
+    for (const auto& v : visuals)
+        out[v.node.id] = v.bounds.getPosition();
+    return out;
+}
+
 void GraphCanvas::clearSelection()
 {
     selectedNodeIds.clear();

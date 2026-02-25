@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <sstream>
 #include <set>
 #include <unordered_set>
 
@@ -712,11 +713,70 @@ void MainComponent::loadPatchFromFile()
                                 nodeLayout.clear();
                                 for (const auto& [id, p] : doc.layout)
                                     nodeLayout[id] = { p.x, p.y };
-                                if (doc.codeText.isNotEmpty())
-                                    setCodeContent(doc.codeText);
-                                else
-                                    setCodeContent(juce::String(duodsp::text::prettyPrint(doc.graph)));
-                                compileFromText();
+
+                                // Load from canonical graph first; avoid reparsing stale/older code text on load.
+                                currentGraph = doc.graph;
+                                {
+                                    std::unordered_set<std::string> ids;
+                                    for (const auto& n : currentGraph.nodes)
+                                        ids.insert(n.id);
+                                    currentGraph.edges.erase(std::remove_if(currentGraph.edges.begin(), currentGraph.edges.end(), [&](const auto& e)
+                                                    { return !ids.contains(e.fromNodeId) || !ids.contains(e.toNodeId); }),
+                                                             currentGraph.edges.end());
+                                    for (auto it = currentGraph.bindings.begin(); it != currentGraph.bindings.end();)
+                                    {
+                                        if (!ids.contains(it->second))
+                                            it = currentGraph.bindings.erase(it);
+                                        else
+                                            ++it;
+                                    }
+                                }
+
+                                // Rebuild code pane from loaded graph to keep both views in sync.
+                                const auto pretty = juce::String(duodsp::text::prettyPrint(currentGraph));
+                                setCodeContent(pretty, false);
+                                compilePending = false;
+
+                                // Rebuild sync map from the pretty-printed code for selection linking.
+                                currentSyncMap.clear();
+                                const auto prettyStd = pretty.toStdString();
+                                std::vector<std::pair<std::string, std::string>> bindingPairs;
+                                for (const auto& b : currentGraph.bindings)
+                                    bindingPairs.push_back(b);
+                                std::sort(bindingPairs.begin(), bindingPairs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+                                size_t cursor = 0;
+                                for (const auto& [name, nodeId] : bindingPairs)
+                                {
+                                    const auto needle = name + " = ";
+                                    auto pos = prettyStd.find(needle, cursor);
+                                    if (pos == std::string::npos)
+                                        pos = prettyStd.find(needle);
+                                    if (pos == std::string::npos)
+                                        continue;
+                                    auto end = prettyStd.find(';', pos);
+                                    if (end == std::string::npos)
+                                        end = pos + needle.size();
+                                    currentSyncMap.addRange(nodeId, static_cast<int>(pos), static_cast<int>(end + 1));
+                                    cursor = end + 1;
+                                }
+                                size_t outCursor = 0;
+                                for (const auto& n : currentGraph.nodes)
+                                {
+                                    if (n.op != "out")
+                                        continue;
+                                    auto pos = prettyStd.find("dac~(", outCursor);
+                                    if (pos == std::string::npos)
+                                        break;
+                                    auto end = prettyStd.find(';', pos);
+                                    if (end == std::string::npos)
+                                        end = pos + 5;
+                                    currentSyncMap.addRange(n.id, static_cast<int>(pos), static_cast<int>(end + 1));
+                                    outCursor = end + 1;
+                                }
+
+                                syncCanvasFromGraph();
+                                runtime.setGraph(currentGraph);
+                                refreshProbeSelectors();
                                 compilePending = false;
 
                                 currentPatchFile = file;
@@ -747,6 +807,9 @@ void MainComponent::savePatchToFile(const bool saveAs)
     {
         if (!file.hasFileExtension(".schism"))
             file = file.withFileExtension(".schism");
+
+        // Persist exactly what the user sees on the canvas at save time.
+        nodeLayout = graphCanvas.getLayoutById();
 
         duodsp::patch::PatchDocument doc;
         doc.codeText = codeDocument.getAllContent();
@@ -1021,6 +1084,41 @@ void MainComponent::compileFromText()
     preferredPreviousGraphForCompile.reset();
     currentGraph = result.graph;
     currentSyncMap = result.syncMap;
+
+    // Keep explicit DAC routing visible in the code pane even for text-first workflows.
+    auto stripDacRoutingBlock = [](std::string text)
+    {
+        const std::string marker = "\n// === DAC ROUTING ===\n";
+        if (const auto pos = text.find(marker); pos != std::string::npos)
+            text.erase(pos);
+        return text;
+    };
+    auto collectDacRoutingLines = [](const duodsp::ir::Graph& g)
+    {
+        std::vector<std::string> lines;
+        std::istringstream iss(duodsp::text::prettyPrint(g));
+        std::string line;
+        while (std::getline(iss, line))
+        {
+            if (line.find("// dac signal <- ") != std::string::npos)
+                lines.push_back(line.substr(line.find("// dac signal <- ")));
+        }
+        return lines;
+    };
+    {
+        auto base = stripDacRoutingBlock(source);
+        const auto routing = collectDacRoutingLines(currentGraph);
+        if (!routing.empty())
+        {
+            while (!base.empty() && (base.back() == '\n' || base.back() == '\r' || base.back() == ' ' || base.back() == '\t'))
+                base.pop_back();
+            base += "\n\n// === DAC ROUTING ===\n";
+            for (const auto& line : routing)
+                base += line + "\n";
+        }
+        if (base != source)
+            setCodeContent(juce::String(base), false);
+    }
 
     for (const auto& node : currentGraph.nodes)
     {

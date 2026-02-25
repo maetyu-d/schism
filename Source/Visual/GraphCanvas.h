@@ -23,6 +23,7 @@ public:
     void selectNodeById(const std::string& nodeId);
     std::string selectedNodeId() const;
     std::vector<std::string> getSelectedNodeIds() const;
+    std::unordered_map<std::string, juce::Point<float>> getLayoutById() const;
     void clearSelection();
     void selectAllNodes();
     void deleteSelectedNodes();
