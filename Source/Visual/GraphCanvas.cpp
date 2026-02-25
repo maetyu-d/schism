@@ -11,10 +11,10 @@ namespace
 constexpr float pdBaseFontSize = 13.0f;
 constexpr float minNodeWidth = 36.0f;
 constexpr float nodeHeight = 18.0f;
-constexpr float portHalf = 3.0f;
+constexpr float portHalf = 4.2f;
 constexpr float minHit = 5.0f;
-constexpr float portHitRadiusPx = 12.0f;
-constexpr float outputHitRadiusPx = 12.0f;
+constexpr float portHitRadiusPx = 16.0f;
+constexpr float outputHitRadiusPx = 16.0f;
 constexpr float cableHitRadiusPx = 6.0f;
 constexpr float canvasInset = 0.0f;
 
@@ -997,12 +997,18 @@ void GraphCanvas::mouseDoubleClick(const juce::MouseEvent& event)
 
 void GraphCanvas::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    const auto before = screenToWorld(event.position);
-    const auto zoomFactor = wheel.deltaY > 0.0f ? 1.1f : 0.91f;
-    zoom = juce::jlimit(0.3f, 3.0f, zoom * zoomFactor);
-    const auto after = screenToWorld(event.position);
-    panOffset.x += (after.x - before.x) * zoom;
-    panOffset.y += (after.y - before.y) * zoom;
+    const auto oldZoom = zoom;
+    const auto worldAtCursor = screenToWorld(event.position);
+    const auto dy = juce::jlimit(-2.0f, 2.0f, wheel.deltaY);
+    const auto zoomFactor = std::exp(dy * 0.22f);
+    zoom = juce::jlimit(0.3f, 3.0f, oldZoom * zoomFactor);
+    if (std::abs(zoom - oldZoom) < 1.0e-6f)
+        return;
+
+    // Keep world point under cursor fixed while zooming.
+    const auto c = canvasBounds();
+    panOffset.x = event.position.x - c.getX() - worldAtCursor.x * zoom;
+    panOffset.y = event.position.y - c.getY() - worldAtCursor.y * zoom;
     repaint();
 }
 } // namespace duodsp::visual
