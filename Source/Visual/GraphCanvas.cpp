@@ -2,23 +2,37 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace duodsp::visual
 {
 namespace
 {
-constexpr float minNodeWidth = 54.0f;
-constexpr float nodeHeight = 19.0f;
-constexpr float portHalf = 2.5f;
+constexpr float pdBaseFontSize = 13.0f;
+constexpr float minNodeWidth = 36.0f;
+constexpr float nodeHeight = 18.0f;
+constexpr float portHalf = 3.0f;
 constexpr float minHit = 5.0f;
-constexpr float canvasInset = 2.0f;
+constexpr float portHitRadiusPx = 12.0f;
+constexpr float outputHitRadiusPx = 12.0f;
+constexpr float cableHitRadiusPx = 6.0f;
+constexpr float canvasInset = 0.0f;
+
+juce::Font pdFont(const float size)
+{
+    return juce::Font(juce::FontOptions("Monaco", size, juce::Font::plain));
+}
 
 juce::String pdObjectTextForNode(const ir::Node& node)
 {
+    if (!node.label.empty() && node.op != "msg" && node.op != "floatatom")
+        return juce::String(node.label);
     if (node.op == "sin")
         return "osc~ 220";
     if (node.op == "saw")
         return "phasor~ 110";
+    if (node.op == "tri")
+        return "tri~ 110";
     if (node.op == "square")
         return "pulse~ 110 0.5";
     if (node.op == "noise")
@@ -27,6 +41,14 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "lop~ 1200";
     if (node.op == "hpf")
         return "hip~ 1200";
+    if (node.op == "clip")
+        return "clip~ -1 1";
+    if (node.op == "tanh")
+        return "tanh~ 1";
+    if (node.op == "slew")
+        return "slew~ 50";
+    if (node.op == "mtof")
+        return "mtof";
     if (node.op == "out")
         return "dac~";
     if (node.op == "add")
@@ -37,6 +59,18 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "*~";
     if (node.op == "div")
         return "/~";
+    if (node.op == "cadd")
+        return "+";
+    if (node.op == "csub")
+        return "-";
+    if (node.op == "cmul")
+        return "*";
+    if (node.op == "cdiv")
+        return "/";
+    if (node.op == "pow")
+        return "pow~";
+    if (node.op == "mod")
+        return "mod~";
     if (node.op == "delay1")
         return "z^-1~";
     if (node.op == "scope")
@@ -52,6 +86,55 @@ juce::String pdObjectTextForNode(const ir::Node& node)
     if (node.op == "obj")
         return node.label.empty() ? "obj" : juce::String(node.label);
     return juce::String(node.op);
+}
+
+juce::String canonicalPdHeadForOp(const std::string& op)
+{
+    if (op == "sin")
+        return "osc~";
+    if (op == "saw")
+        return "phasor~";
+    if (op == "tri")
+        return "tri~";
+    if (op == "square")
+        return "pulse~";
+    if (op == "noise")
+        return "noise~";
+    if (op == "lpf")
+        return "lop~";
+    if (op == "hpf")
+        return "hip~";
+    if (op == "clip")
+        return "clip~";
+    if (op == "tanh")
+        return "tanh~";
+    if (op == "slew")
+        return "slew~";
+    if (op == "mtof")
+        return "mtof";
+    if (op == "out")
+        return "dac~";
+    if (op == "add")
+        return "+~";
+    if (op == "sub")
+        return "-~";
+    if (op == "mul")
+        return "*~";
+    if (op == "div")
+        return "/~";
+    if (op == "pow")
+        return "pow~";
+    if (op == "mod")
+        return "mod~";
+    if (op == "cadd")
+        return "+";
+    if (op == "csub")
+        return "-";
+    if (op == "cmul")
+        return "*";
+    if (op == "cdiv")
+        return "/";
+    return {};
 }
 } // namespace
 
@@ -83,6 +166,9 @@ void GraphCanvas::setGraph(const ir::Graph& g, const std::unordered_map<std::str
         else
             ++it;
     }
+    selectedEdges.erase(std::remove_if(selectedEdges.begin(), selectedEdges.end(), [&](const auto& e)
+                        { return graph.findNode(e.fromNodeId) == nullptr || graph.findNode(e.toNodeId) == nullptr; }),
+                        selectedEdges.end());
     if (primarySelectedNodeId.has_value() && graph.findNode(*primarySelectedNodeId) == nullptr)
         primarySelectedNodeId.reset();
     repaint();
@@ -91,6 +177,7 @@ void GraphCanvas::setGraph(const ir::Graph& g, const std::unordered_map<std::str
 void GraphCanvas::rebuildVisuals(const std::unordered_map<std::string, juce::Point<float>>& layoutById)
 {
     visuals.clear();
+    const auto measureFont = pdFont(pdBaseFontSize);
     for (size_t i = 0; i < graph.nodes.size(); ++i)
     {
         NodeVisual v;
@@ -105,13 +192,17 @@ void GraphCanvas::rebuildVisuals(const std::unordered_map<std::string, juce::Poi
         else
             pos = { 30.0f + static_cast<float>((i % 4) * 170), 90.0f + static_cast<float>((i / 4) * 70) };
 
-        const auto textWidth = 6.15f * static_cast<float>(v.displayText.length()) + 14.0f;
+        const auto textWidth = static_cast<float>(measureFont.getStringWidth(v.displayText)) + 8.0f;
         const auto w = juce::jmax(minNodeWidth, textWidth);
         v.bounds = juce::Rectangle<float>(pos.x, pos.y, w, nodeHeight);
 
         const auto spec = ir::opSpecFor(v.node.op);
-        for (const auto& input : spec.inputs)
+        for (int port = 0; port < static_cast<int>(spec.inputs.size()); ++port)
+        {
+            const auto& input = spec.inputs[static_cast<size_t>(port)];
             v.inputRates.push_back(input.rate);
+            v.inputHot.push_back(spec.hotInput >= 0 && spec.hotInput == port);
+        }
         v.outputRate = spec.outputRate;
         visuals.push_back(v);
     }
@@ -153,6 +244,7 @@ std::vector<std::string> GraphCanvas::getSelectedNodeIds() const
 void GraphCanvas::clearSelection()
 {
     selectedNodeIds.clear();
+    selectedEdges.clear();
     primarySelectedNodeId.reset();
     repaint();
 }
@@ -160,6 +252,7 @@ void GraphCanvas::clearSelection()
 void GraphCanvas::selectAllNodes()
 {
     selectedNodeIds.clear();
+    selectedEdges.clear();
     for (const auto& n : graph.nodes)
         selectedNodeIds.insert(n.id);
     if (!selectedNodeIds.empty())
@@ -173,10 +266,41 @@ void GraphCanvas::deleteSelectedNodes()
 {
     if (selectedNodeIds.empty())
         return;
-    if (onDeleteNodeRequested != nullptr)
-        for (const auto& id : selectedNodeIds)
+    std::vector<std::string> ids;
+    ids.reserve(selectedNodeIds.size());
+    for (const auto& id : selectedNodeIds)
+        ids.push_back(id);
+    if (onDeleteNodesRequested != nullptr)
+        onDeleteNodesRequested(ids);
+    else if (onDeleteNodeRequested != nullptr)
+        for (const auto& id : ids)
             onDeleteNodeRequested(id);
     clearSelection();
+}
+
+bool GraphCanvas::deleteSelection()
+{
+    bool didSomething = false;
+    if (!selectedEdges.empty())
+    {
+        if (onDeleteEdgesRequested != nullptr)
+            onDeleteEdgesRequested(selectedEdges);
+        selectedEdges.clear();
+        didSomething = true;
+    }
+    if (!selectedNodeIds.empty())
+    {
+        deleteSelectedNodes();
+        didSomething = true;
+    }
+    if (didSomething)
+        repaint();
+    return didSomething;
+}
+
+bool GraphCanvas::hasAnySelection() const
+{
+    return !selectedNodeIds.empty() || !selectedEdges.empty();
 }
 
 std::optional<size_t> GraphCanvas::indexForNodeId(const std::string& nodeId) const
@@ -193,6 +317,14 @@ void GraphCanvas::beginInlineEdit(const std::string& nodeId)
     if (!idx.has_value())
         return;
 
+    // Keep edited node selected for immediate follow-up actions (e.g. rewiring).
+    selectedNodeIds.clear();
+    selectedNodeIds.insert(nodeId);
+    primarySelectedNodeId = nodeId;
+    selectedEdges.clear();
+    if (onNodeSelectionChanged != nullptr)
+        onNodeSelectionChanged(nodeId);
+
     editingNodeId = nodeId;
     const auto& n = visuals[*idx];
     juce::String text;
@@ -203,8 +335,10 @@ void GraphCanvas::beginInlineEdit(const std::string& nodeId)
     else
         text = n.displayText;
 
-    const auto r = nodeScreenBounds(n).reduced(1.0f, 1.0f).getSmallestIntegerContainer();
+    auto r = nodeScreenBounds(n).reduced(1.0f, 1.0f).getSmallestIntegerContainer();
+    r.setSize(juce::jmax(72, r.getWidth()), juce::jmax(20, r.getHeight()));
     inlineEditor.setBounds(r);
+    inlineEditor.setFont(pdFont(juce::jlimit(11.0f, 20.0f, pdBaseFontSize * zoom)));
     inlineEditor.setText(text, juce::dontSendNotification);
     inlineEditor.setVisible(true);
     inlineEditor.grabKeyboardFocus();
@@ -232,23 +366,28 @@ void GraphCanvas::cancelInlineEdit()
 
 void GraphCanvas::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xffefefef));
-    const auto canvas = canvasBounds();
-    g.setColour(juce::Colour(0xfff6f6f6));
-    g.fillRect(canvas);
+    g.fillAll(juce::Colour(0xffe5e5e5));
 
-    g.setColour(juce::Colours::black);
+    std::unordered_map<std::string, const NodeVisual*> byId;
+    byId.reserve(visuals.size());
+    for (const auto& v : visuals)
+        byId[v.node.id] = &v;
+
     for (const auto& edge : graph.edges)
     {
-        const auto fromIt = std::find_if(visuals.begin(), visuals.end(), [&edge](const auto& n) { return n.node.id == edge.fromNodeId; });
-        const auto toIt = std::find_if(visuals.begin(), visuals.end(), [&edge](const auto& n) { return n.node.id == edge.toNodeId; });
-        if (fromIt == visuals.end() || toIt == visuals.end())
+        if (!byId.contains(edge.fromNodeId) || !byId.contains(edge.toNodeId))
             continue;
+        const auto* fromIt = byId[edge.fromNodeId];
+        const auto* toIt = byId[edge.toNodeId];
+
+        const auto isSelected = std::find_if(selectedEdges.begin(), selectedEdges.end(), [&](const auto& e)
+                                { return e.fromNodeId == edge.fromNodeId && e.toNodeId == edge.toNodeId && e.toPort == edge.toPort; }) != selectedEdges.end();
+        g.setColour(isSelected ? juce::Colour(0xff3b82f6) : juce::Colours::black);
 
         juce::Path cord;
         cord.startNewSubPath(outputPortPosition(*fromIt));
         cord.lineTo(inputPortPosition(*toIt, edge.toPort));
-        g.strokePath(cord, juce::PathStrokeType(1.0f));
+        g.strokePath(cord, juce::PathStrokeType(isSelected ? 2.0f : 1.0f));
     }
 
     if (connectFromNode.has_value() && *connectFromNode < visuals.size())
@@ -273,14 +412,14 @@ void GraphCanvas::paint(juce::Graphics& g)
             msg.lineTo(rect.getRight(), rect.getBottom());
             msg.lineTo(rect.getX(), rect.getBottom());
             msg.closeSubPath();
-            g.setColour(juce::Colour(0xfffafafa));
+            g.setColour(juce::Colours::white);
             g.fillPath(msg);
             g.setColour(juce::Colours::black);
             g.strokePath(msg, juce::PathStrokeType(1.0f));
         }
         else
         {
-            g.setColour(juce::Colour(0xfffafafa));
+            g.setColour(juce::Colours::white);
             g.fillRect(rect);
             g.setColour(juce::Colours::black);
             g.drawRect(rect, 1);
@@ -297,32 +436,89 @@ void GraphCanvas::paint(juce::Graphics& g)
 
         if (isSel)
         {
-            g.setColour(juce::Colour(0xff3b82f6));
-            g.drawRect(rect.expanded(1.0f), 1);
+            g.setColour(juce::Colours::black);
+            g.drawRect(rect.expanded(1.0f), 2);
         }
 
         g.setColour(juce::Colours::black);
-        g.setFont(juce::FontOptions("Monaco", 10.0f, juce::Font::plain));
-        g.drawText(visual.displayText, rect.getSmallestIntegerContainer().reduced(4, 1), juce::Justification::centredLeft, false);
+        const auto scaledFont = pdFont(juce::jlimit(10.0f, 24.0f, pdBaseFontSize * zoom));
+        g.setFont(scaledFont);
+        const auto textPadX = juce::jmax(2, static_cast<int>(std::round(3.0f * zoom)));
+        const auto textPadY = juce::jmax(0, static_cast<int>(std::round(1.0f * zoom)));
+        g.drawFittedText(visual.displayText, rect.getSmallestIntegerContainer().reduced(textPadX, textPadY), juce::Justification::centredLeft, 1);
 
         for (int port = 0; port < static_cast<int>(visual.inputRates.size()); ++port)
         {
             const auto p = inputPortPosition(visual, port);
             const auto pr = juce::jmax(2.0f, portHalf * zoom);
-            g.fillRect(juce::Rectangle<float>(p.x - pr, p.y - pr * 0.35f, pr * 2.0f, pr * 0.9f));
+            const auto inletRect = juce::Rectangle<float>(p.x - pr, p.y - pr * 0.35f, pr * 2.0f, pr * 0.9f);
+            const auto isHot = port < static_cast<int>(visual.inputHot.size()) ? visual.inputHot[static_cast<size_t>(port)] : false;
+            const auto rate = port < static_cast<int>(visual.inputRates.size()) ? visual.inputRates[static_cast<size_t>(port)] : ir::PortRate::audio;
+            if (rate == ir::PortRate::audio)
+            {
+                g.setColour(juce::Colours::black);
+                g.fillRect(inletRect);
+            }
+            else if (rate == ir::PortRate::control)
+            {
+                g.setColour(juce::Colours::white);
+                g.fillRect(inletRect);
+                g.setColour(juce::Colours::black);
+                g.drawRect(inletRect, 1.0f);
+            }
+            else
+            {
+                g.setColour(juce::Colour(0xffd0d0d0));
+                g.fillRect(inletRect);
+                g.setColour(juce::Colours::black);
+                g.drawRect(inletRect, 1.0f);
+                g.fillEllipse(inletRect.withSizeKeepingCentre(pr * 0.65f, pr * 0.65f));
+            }
+
+            // Pd-like hot inlet cue for trigger inlets (e.g. left inlet on control math boxes).
+            if (isHot && rate != ir::PortRate::audio)
+            {
+                juce::Path hot;
+                hot.startNewSubPath(p.x, p.y - pr * 1.25f);
+                hot.lineTo(p.x - pr * 0.7f, p.y - pr * 0.25f);
+                hot.lineTo(p.x + pr * 0.7f, p.y - pr * 0.25f);
+                hot.closeSubPath();
+                g.setColour(juce::Colours::black);
+                g.fillPath(hot);
+            }
         }
         const auto outP = outputPortPosition(visual);
         const auto pr = juce::jmax(2.0f, portHalf * zoom);
-        g.fillRect(juce::Rectangle<float>(outP.x - pr, outP.y - pr * 0.55f, pr * 2.0f, pr * 1.1f));
+        const auto outletRect = juce::Rectangle<float>(outP.x - pr, outP.y - pr * 0.55f, pr * 2.0f, pr * 1.1f);
+        if (visual.outputRate == ir::PortRate::audio)
+        {
+            g.setColour(juce::Colours::black);
+            g.fillRect(outletRect);
+        }
+        else if (visual.outputRate == ir::PortRate::control)
+        {
+            g.setColour(juce::Colours::white);
+            g.fillRect(outletRect);
+            g.setColour(juce::Colours::black);
+            g.drawRect(outletRect, 1.0f);
+        }
+        else
+        {
+            g.setColour(juce::Colour(0xffd0d0d0));
+            g.fillRect(outletRect);
+            g.setColour(juce::Colours::black);
+            g.drawRect(outletRect, 1.0f);
+            g.fillEllipse(outletRect.withSizeKeepingCentre(pr * 0.65f, pr * 0.65f));
+        }
     }
 
     if (marqueeSelecting)
     {
         juce::Rectangle<float> r(marqueeStart, marqueeCurrent);
         r = r.getSmallestIntegerContainer().toFloat();
-        g.setColour(juce::Colour(0x303b82f6));
+        g.setColour(juce::Colour(0x30222222));
         g.fillRect(r);
-        g.setColour(juce::Colour(0xff3b82f6));
+        g.setColour(juce::Colours::black);
         g.drawRect(r, 1.0f);
     }
 }
@@ -331,10 +527,37 @@ void GraphCanvas::resized() {}
 
 bool GraphCanvas::keyPressed(const juce::KeyPress& key)
 {
-    if ((key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) && !selectedNodeIds.empty())
+    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
-        deleteSelectedNodes();
-        return true;
+        if (deleteSelection())
+            return true;
+    }
+
+    const auto mods = key.getModifiers();
+    const auto ch = key.getTextCharacter();
+    const auto printable = ch >= 32 && ch < 127;
+    if (printable && !mods.isCommandDown() && !mods.isCtrlDown() && !mods.isAltDown())
+    {
+        if (!primarySelectedNodeId.has_value())
+            return false;
+        const auto idx = indexForNodeId(*primarySelectedNodeId);
+        if (!idx.has_value())
+            return false;
+
+        const auto& n = visuals[*idx].node;
+        if (n.op == "constant")
+            return false;
+
+        beginInlineEdit(n.id);
+        if (inlineEditor.isVisible())
+        {
+            const auto head = canonicalPdHeadForOp(n.op);
+            if (head.isNotEmpty() && n.op != "obj" && n.op != "msg" && n.op != "floatatom")
+                inlineEditor.setText(head + " ", juce::dontSendNotification);
+            inlineEditor.setCaretPosition(inlineEditor.getTotalNumChars());
+            inlineEditor.insertTextAtCaret(juce::String::charToString(ch));
+            return true;
+        }
     }
     return false;
 }
@@ -347,17 +570,46 @@ std::optional<size_t> GraphCanvas::hitNode(const juce::Point<float> p) const
     return std::nullopt;
 }
 
+std::optional<size_t> GraphCanvas::hitEdge(const juce::Point<float> p) const
+{
+    auto distanceToSegment = [](const juce::Point<float> pt, const juce::Point<float> a, const juce::Point<float> b)
+    {
+        const auto ab = b - a;
+        const auto ap = pt - a;
+        const auto len2 = ab.x * ab.x + ab.y * ab.y;
+        if (len2 <= 1.0e-6f)
+            return pt.getDistanceFrom(a);
+        const auto t = juce::jlimit(0.0f, 1.0f, (ap.x * ab.x + ap.y * ab.y) / len2);
+        const juce::Point<float> proj { a.x + ab.x * t, a.y + ab.y * t };
+        return pt.getDistanceFrom(proj);
+    };
+
+    for (size_t i = graph.edges.size(); i > 0; --i)
+    {
+        const auto& e = graph.edges[i - 1];
+        const auto from = std::find_if(visuals.begin(), visuals.end(), [&](const auto& n) { return n.node.id == e.fromNodeId; });
+        const auto to = std::find_if(visuals.begin(), visuals.end(), [&](const auto& n) { return n.node.id == e.toNodeId; });
+        if (from == visuals.end() || to == visuals.end())
+            continue;
+        const auto a = outputPortPosition(*from);
+        const auto b = inputPortPosition(*to, e.toPort);
+        if (distanceToSegment(p, a, b) <= cableHitRadiusPx)
+            return i - 1;
+    }
+    return std::nullopt;
+}
+
 std::optional<int> GraphCanvas::hitInputPort(const NodeVisual& visual, const juce::Point<float> p) const
 {
     for (int port = 0; port < static_cast<int>(visual.inputRates.size()); ++port)
-        if (inputPortPosition(visual, port).getDistanceFrom(p) <= juce::jmax(minHit, portHalf * zoom * 2.2f))
+        if (inputPortPosition(visual, port).getDistanceFrom(p) <= juce::jmax(minHit, portHitRadiusPx))
             return port;
     return std::nullopt;
 }
 
 bool GraphCanvas::hitOutputPort(const NodeVisual& visual, const juce::Point<float> p) const
 {
-    return outputPortPosition(visual).getDistanceFrom(p) <= juce::jmax(minHit, portHalf * zoom * 2.2f);
+    return outputPortPosition(visual).getDistanceFrom(p) <= juce::jmax(minHit, outputHitRadiusPx);
 }
 
 juce::Point<float> GraphCanvas::inputPortPosition(const NodeVisual& visual, const int port) const
@@ -409,9 +661,26 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
     put.addSeparator();
     put.addItem(10, "osc~");
     put.addItem(11, "phasor~");
-    put.addItem(12, "noise~");
-    put.addItem(13, "lop~");
-    put.addItem(14, "dac~");
+    put.addItem(12, "tri~");
+    put.addItem(13, "noise~");
+    put.addItem(14, "lop~");
+    put.addItem(15, "hip~");
+    put.addItem(16, "clip~");
+    put.addItem(17, "tanh~");
+    put.addItem(18, "slew~");
+    put.addItem(19, "mtof");
+    put.addItem(20, "pow~");
+    put.addItem(21, "mod~");
+    put.addItem(22, "dac~");
+    put.addSeparator();
+    put.addItem(30, "+~");
+    put.addItem(31, "-~");
+    put.addItem(32, "*~");
+    put.addItem(33, "/~");
+    put.addItem(34, "+");
+    put.addItem(35, "-");
+    put.addItem(36, "*");
+    put.addItem(37, "/");
 
     const auto p = screenToWorld(screenPos);
     juce::Component::SafePointer<GraphCanvas> safeThis(this);
@@ -432,18 +701,54 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                           else if (res == 11)
                               safeThis->onAddNodeRequested("saw", p);
                           else if (res == 12)
-                              safeThis->onAddNodeRequested("noise", p);
+                              safeThis->onAddNodeRequested("tri", p);
                           else if (res == 13)
-                              safeThis->onAddNodeRequested("lpf", p);
+                              safeThis->onAddNodeRequested("noise", p);
                           else if (res == 14)
+                              safeThis->onAddNodeRequested("lpf", p);
+                          else if (res == 15)
+                              safeThis->onAddNodeRequested("hpf", p);
+                          else if (res == 16)
+                              safeThis->onAddNodeRequested("clip", p);
+                          else if (res == 17)
+                              safeThis->onAddNodeRequested("tanh", p);
+                          else if (res == 18)
+                              safeThis->onAddNodeRequested("slew", p);
+                          else if (res == 19)
+                              safeThis->onAddNodeRequested("mtof", p);
+                          else if (res == 20)
+                              safeThis->onAddNodeRequested("pow", p);
+                          else if (res == 21)
+                              safeThis->onAddNodeRequested("mod", p);
+                          else if (res == 22)
                               safeThis->onAddNodeRequested("out", p);
+                          else if (res == 30)
+                              safeThis->onAddNodeRequested("add", p);
+                          else if (res == 31)
+                              safeThis->onAddNodeRequested("sub", p);
+                          else if (res == 32)
+                              safeThis->onAddNodeRequested("mul", p);
+                          else if (res == 33)
+                              safeThis->onAddNodeRequested("div", p);
+                          else if (res == 34)
+                              safeThis->onAddNodeRequested("cadd", p);
+                          else if (res == 35)
+                              safeThis->onAddNodeRequested("csub", p);
+                          else if (res == 36)
+                              safeThis->onAddNodeRequested("cmul", p);
+                          else if (res == 37)
+                              safeThis->onAddNodeRequested("cdiv", p);
                       });
 }
 
 void GraphCanvas::mouseDown(const juce::MouseEvent& event)
 {
     if (inlineEditor.isVisible())
-        commitInlineEdit();
+    {
+        const auto insideEditor = inlineEditor.getBounds().contains(event.getPosition());
+        if (!insideEditor)
+            commitInlineEdit();
+    }
 
     grabKeyboardFocus();
     liveMouse = event.position;
@@ -456,6 +761,8 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
 
     if (event.mods.isMiddleButtonDown() || event.mods.isAltDown())
     {
+        pendingDragNode.reset();
+        pendingMarqueeStart = false;
         panning = true;
         panDragStartMouse = event.position;
         panDragStartOffset = panOffset;
@@ -463,11 +770,40 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
     }
 
     const auto hit = hitNode(event.position);
+    const auto edgeHit = hitEdge(event.position);
+    if (!hit.has_value() && edgeHit.has_value())
+    {
+        const auto& e = graph.edges[*edgeHit];
+        const auto isSelected = std::find_if(selectedEdges.begin(), selectedEdges.end(), [&](const auto& x)
+                                { return x.fromNodeId == e.fromNodeId && x.toNodeId == e.toNodeId && x.toPort == e.toPort; }) != selectedEdges.end();
+        if (!event.mods.isShiftDown())
+        {
+            selectedNodeIds.clear();
+            primarySelectedNodeId.reset();
+            selectedEdges.clear();
+        }
+        if (isSelected && event.mods.isShiftDown())
+            selectedEdges.erase(std::remove_if(selectedEdges.begin(), selectedEdges.end(), [&](const auto& x)
+                               { return x.fromNodeId == e.fromNodeId && x.toNodeId == e.toNodeId && x.toPort == e.toPort; }),
+                                selectedEdges.end());
+        else
+            selectedEdges.push_back(e);
+        repaint();
+        return;
+    }
     if (hit.has_value())
     {
         auto& visual = visuals[*hit];
-        if (hitOutputPort(visual, event.position))
+        const auto inPortHit = hitInputPort(visual, event.position).has_value();
+        const auto outPortHit = hitOutputPort(visual, event.position);
+        const auto strictOutHitForFloat = outputPortPosition(visual).getDistanceFrom(event.position) <= juce::jmax(2.0f, portHalf * zoom * 1.25f);
+
+        if (outPortHit)
         {
+            pendingDragNode.reset();
+            pendingMarqueeStart = false;
+            pendingFloatatomEdit = false;
+            pendingFloatatomNodeId.clear();
             connectFromNode = hit;
             return;
         }
@@ -487,28 +823,36 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
                 selectedNodeIds.clear();
                 selectedNodeIds.insert(id);
             }
+            selectedEdges.clear();
         }
         primarySelectedNodeId = id;
         if (onNodeSelectionChanged != nullptr)
             onNodeSelectionChanged(id);
 
-        draggingNode = hit;
+        pendingDragNode = hit;
+        draggingNode.reset();
         dragStartWorld = screenToWorld(event.position);
         dragStartPositions.clear();
         for (auto& v : visuals)
             if (selectedNodeIds.contains(v.node.id))
                 dragStartPositions[v.node.id] = v.bounds.getPosition();
+
+        pendingFloatatomEdit = (visual.style == NodeStyle::floatatom && !inPortHit && !strictOutHitForFloat);
+        pendingFloatatomNodeId = visual.node.id;
+        pendingFloatatomMouseDown = event.position;
         repaint();
         return;
     }
 
-    marqueeSelecting = true;
+    pendingDragNode.reset();
+    pendingFloatatomEdit = false;
+    pendingFloatatomNodeId.clear();
+    pendingMarqueeStart = true;
+    pendingMarqueeClearsSelection = !event.mods.isShiftDown();
+    marqueeSelecting = false;
     marqueeStart = event.position;
     marqueeCurrent = event.position;
     marqueeBaseSelection = selectedNodeIds;
-    if (!event.mods.isShiftDown())
-        selectedNodeIds.clear();
-    repaint();
 }
 
 void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
@@ -522,8 +866,21 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
         return;
     }
 
+    if (pendingDragNode.has_value() && !draggingNode.has_value())
+    {
+        if (event.getDistanceFromDragStart() > 2)
+        {
+            draggingNode = pendingDragNode;
+            pendingDragNode.reset();
+            if (pendingFloatatomEdit)
+                pendingFloatatomEdit = false;
+        }
+    }
+
     if (draggingNode.has_value())
     {
+        if (pendingFloatatomEdit && event.getDistanceFromDragStart() > 2)
+            pendingFloatatomEdit = false;
         const auto delta = screenToWorld(event.position) - dragStartWorld;
         for (auto& v : visuals)
         {
@@ -546,6 +903,16 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
         return;
     }
 
+    if (pendingMarqueeStart && !marqueeSelecting && event.getDistanceFromDragStart() > 2)
+    {
+        marqueeSelecting = true;
+        if (pendingMarqueeClearsSelection)
+        {
+            selectedNodeIds.clear();
+            selectedEdges.clear();
+        }
+    }
+
     if (marqueeSelecting)
     {
         marqueeCurrent = event.position;
@@ -566,6 +933,7 @@ void GraphCanvas::mouseUp(const juce::MouseEvent& event)
     liveMouse = event.position;
     panning = false;
     draggingNode.reset();
+    pendingDragNode.reset();
 
     if (connectFromNode.has_value() && *connectFromNode < visuals.size())
     {
@@ -573,12 +941,41 @@ void GraphCanvas::mouseUp(const juce::MouseEvent& event)
         const auto targetHit = hitNode(event.position);
         if (targetHit.has_value() && *targetHit < visuals.size() && *targetHit != *connectFromNode)
         {
-            const auto port = hitInputPort(visuals[*targetHit], event.position);
+            auto port = hitInputPort(visuals[*targetHit], event.position);
+            if (!port.has_value())
+            {
+                // Forgiving drop: if not exactly on an inlet, pick nearest inlet within a generous radius.
+                float bestDist = 1.0e9f;
+                int bestPort = -1;
+                const auto& targetVisual = visuals[*targetHit];
+                for (int p = 0; p < static_cast<int>(targetVisual.inputRates.size()); ++p)
+                {
+                    const auto d = inputPortPosition(targetVisual, p).getDistanceFrom(event.position);
+                    if (d < bestDist)
+                    {
+                        bestDist = d;
+                        bestPort = p;
+                    }
+                }
+                if (bestPort >= 0 && bestDist <= 16.0f)
+                    port = bestPort;
+            }
             if (port.has_value() && onConnectRequested != nullptr)
                 onConnectRequested(source, visuals[*targetHit].node.id, *port);
         }
     }
     connectFromNode.reset();
+    if (pendingFloatatomEdit && !pendingFloatatomNodeId.empty() && event.position.getDistanceFrom(pendingFloatatomMouseDown) <= 2.0f)
+        beginInlineEdit(pendingFloatatomNodeId);
+    pendingFloatatomEdit = false;
+    pendingFloatatomNodeId.clear();
+    if (pendingMarqueeStart && !marqueeSelecting && pendingMarqueeClearsSelection)
+    {
+        selectedNodeIds.clear();
+        selectedEdges.clear();
+        primarySelectedNodeId.reset();
+    }
+    pendingMarqueeStart = false;
     marqueeSelecting = false;
     repaint();
 }
@@ -594,7 +991,7 @@ void GraphCanvas::mouseDoubleClick(const juce::MouseEvent& event)
     if (!hit.has_value())
         return;
     const auto& n = visuals[*hit].node;
-    if (n.op == "obj" || n.op == "msg" || n.op == "floatatom")
+    if (n.op != "constant")
         beginInlineEdit(n.id);
 }
 

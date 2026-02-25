@@ -178,7 +178,7 @@ struct Lexer
         while (!isAtEnd())
         {
             const auto c = peek();
-            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_')
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '~')
                 break;
             advance();
         }
@@ -510,6 +510,13 @@ struct CompileContext
     }
 };
 
+std::string canonicalOpFromCallName(const std::string& name)
+{
+    if (name == "dac~")
+        return "out";
+    return name;
+}
+
 std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl)
 {
     switch (expr.kind)
@@ -539,13 +546,13 @@ std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl
         {
             const auto lhs = compileExpr(ctx, *expr.args[0], forceControl);
             const auto rhs = compileExpr(ctx, *expr.args[1], forceControl);
-            std::string op = "add";
+            std::string op = forceControl ? "cadd" : "add";
             if (expr.op == "-")
-                op = "sub";
+                op = forceControl ? "csub" : "sub";
             else if (expr.op == "*")
-                op = "mul";
+                op = forceControl ? "cmul" : "mul";
             else if (expr.op == "/")
-                op = "div";
+                op = forceControl ? "cdiv" : "div";
             const auto id = ctx.addNode(op, expr.op, expr.start, expr.end);
             ctx.connect(lhs, id, 0);
             ctx.connect(rhs, id, 1);
@@ -553,7 +560,8 @@ std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl
         }
         case ExprKind::call:
         {
-            const auto id = ctx.addNode(expr.text, expr.text, expr.start, expr.end);
+            const auto op = canonicalOpFromCallName(expr.text);
+            const auto id = ctx.addNode(op, expr.text, expr.start, expr.end);
             for (int i = 0; i < static_cast<int>(expr.args.size()); ++i)
             {
                 const auto arg = compileExpr(ctx, *expr.args[static_cast<size_t>(i)], forceControl);
@@ -570,7 +578,8 @@ std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl
                 ctx.diagnostics.push_back({ "Pipeline RHS must be a call.", rhs.start, rhs.end });
                 return source;
             }
-            const auto id = ctx.addNode(rhs.text, rhs.text, expr.start, expr.end);
+            const auto op = canonicalOpFromCallName(rhs.text);
+            const auto id = ctx.addNode(op, rhs.text, expr.start, expr.end);
             ctx.connect(source, id, 0);
             for (int i = 0; i < static_cast<int>(rhs.args.size()); ++i)
             {
@@ -618,6 +627,25 @@ std::vector<const ir::Edge*> inputEdgesFor(const ir::Graph& graph, const std::st
             edges.push_back(&e);
     std::sort(edges.begin(), edges.end(), [](const auto* a, const auto* b) { return a->toPort < b->toPort; });
     return edges;
+}
+
+void sanitizeGraphReferences(ir::Graph& graph)
+{
+    std::unordered_set<std::string> ids;
+    for (const auto& n : graph.nodes)
+        ids.insert(n.id);
+
+    graph.edges.erase(std::remove_if(graph.edges.begin(), graph.edges.end(), [&](const auto& e)
+                     { return !ids.contains(e.fromNodeId) || !ids.contains(e.toNodeId); }),
+                      graph.edges.end());
+
+    for (auto it = graph.bindings.begin(); it != graph.bindings.end();)
+    {
+        if (!ids.contains(it->second))
+            it = graph.bindings.erase(it);
+        else
+            ++it;
+    }
 }
 
 std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::unordered_map<std::string, std::string>& memo)
@@ -784,6 +812,8 @@ CompileResult compile(const std::string& source, const ir::Graph* previousGraph)
     if (previousGraph != nullptr)
         preserveStableNodeIds(*previousGraph, ctx.graph, ctx.syncMap);
 
+    sanitizeGraphReferences(ctx.graph);
+
     for (const auto& issue : ir::validateGraph(ctx.graph))
         ctx.diagnostics.push_back({ issue.message, 0, 0 });
 
@@ -813,7 +843,7 @@ std::string prettyPrint(const ir::Graph& graph)
             continue;
         const auto ins = inputEdgesFor(graph, n.id);
         if (ins.size() >= 2)
-            out << "out(" << exprForNode(graph, ins[0]->fromNodeId, memo) << ", " << exprForNode(graph, ins[1]->fromNodeId, memo) << ");\n";
+            out << "dac~(" << exprForNode(graph, ins[0]->fromNodeId, memo) << ", " << exprForNode(graph, ins[1]->fromNodeId, memo) << ");\n";
     }
     return out.str();
 }

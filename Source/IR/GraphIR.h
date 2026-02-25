@@ -40,6 +40,7 @@ struct OpSpec
 {
     PortRate outputRate = PortRate::audio;
     std::vector<PortSpec> inputs;
+    int hotInput = -1;
 };
 
 struct Graph

@@ -38,6 +38,40 @@ duodsp::ir::Graph makeConstantOutGraph(const std::string& constId, const double 
     return g;
 }
 
+float runGraphAndReadSample(duodsp::dsp::RuntimeEngine& engine, const duodsp::ir::Graph& g, const int numSamples = 64)
+{
+    juce::AudioBuffer<float> buffer(2, numSamples);
+    engine.setGraph(g);
+    engine.processBlock(buffer);
+    return buffer.getSample(0, numSamples - 1);
+}
+
+duodsp::ir::Graph makeUnaryOpGraph(const std::string& op, const std::string& label, const double input)
+{
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "src", "constant", std::to_string(input), input });
+    g.nodes.push_back({ "op", op, label, std::nullopt });
+    g.nodes.push_back({ "bus", "constant", "0", 0.0 });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "src", "op", 0 });
+    g.edges.push_back({ "bus", "out", 0 });
+    g.edges.push_back({ "op", "out", 1 });
+    g.bindings["sig"] = "op";
+    return g;
+}
+
+duodsp::ir::Graph makeSourceFreeOpGraph(const std::string& op, const std::string& label)
+{
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "op", op, label, std::nullopt });
+    g.nodes.push_back({ "bus", "constant", "0", 0.0 });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "bus", "out", 0 });
+    g.edges.push_back({ "op", "out", 1 });
+    g.bindings["sig"] = "op";
+    return g;
+}
+
 void testCompileAndSync()
 {
     const std::string source =
@@ -168,6 +202,63 @@ void testProbeTargeting()
     require(!spectrum.empty(), "Spectrum probe snapshot should contain bins.");
 }
 
+void testControlMathCodeRoundTrip()
+{
+    const std::string source =
+        "a = 3;\n"
+        "b = 5;\n"
+        "k = @k (a + b * 2);\n"
+        "sig = sin(k);\n"
+        "out(0, sig);\n";
+
+    const auto r = duodsp::text::compile(source, nullptr);
+    require(r.diagnostics.empty(), "Control-math source should compile without diagnostics.");
+
+    bool hasControlMath = false;
+    for (const auto& n : r.graph.nodes)
+    {
+        if (n.op == "cadd" || n.op == "cmul" || n.op == "csub" || n.op == "cdiv")
+        {
+            hasControlMath = true;
+            break;
+        }
+    }
+    require(hasControlMath, "Expected control-rate math nodes for @k expression.");
+
+    const auto printed = duodsp::text::prettyPrint(r.graph);
+    const auto r2 = duodsp::text::compile(printed, &r.graph);
+    require(r2.diagnostics.empty(), "Pretty-printed control-math code should recompile cleanly.");
+}
+
+void testLabelDefaultsForNodes()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 128, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    auto near = [](const float a, const float b, const float eps)
+    {
+        return std::abs(a - b) <= eps;
+    };
+
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("mul", "*~ 0.1", 1.0), 64), 0.1f, 0.02f), "*~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("add", "+~ 0.25", 1.0), 64), 1.25f, 0.02f), "+~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("sub", "-~ 0.25", 1.0), 64), 0.75f, 0.02f), "-~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("div", "/~ 4", 1.0), 64), 0.25f, 0.02f), "/~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("pow", "pow~ 2", 3.0), 64), 9.0f, 0.05f), "pow~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("mod", "mod~ 2", 5.0), 64), 1.0f, 0.05f), "mod~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("clip", "clip~ -0.2 0.2", 1.0), 64), 0.2f, 0.02f), "clip~ args defaults not applied.");
+
+    const auto tanhOut = runGraphAndReadSample(engine, makeUnaryOpGraph("tanh", "tanh~ 0.5", 1.0), 64);
+    require(near(tanhOut, std::tanh(0.5f), 0.03f), "tanh~ arg default not applied.");
+
+    const auto mtofOut = runGraphAndReadSample(engine, makeSourceFreeOpGraph("mtof", "mtof 69"), 64);
+    require(near(mtofOut, 440.0f, 0.5f), "mtof arg default not applied.");
+
+    const auto phasorOut = runGraphAndReadSample(engine, makeSourceFreeOpGraph("saw", "phasor~ 400"), 101);
+    require(phasorOut > 0.4f, "phasor~ arg default likely not applied.");
+}
+
 std::string jsonEscape(const std::string& s)
 {
     std::string out;
@@ -238,6 +329,8 @@ int main(int argc, char** argv)
         { "cycle_rule", &testCycleRule },
         { "typed_ports", &testTypedPortValidation },
         { "probe_targeting", &testProbeTargeting },
+        { "control_math_code", &testControlMathCodeRoundTrip },
+        { "label_defaults", &testLabelDefaultsForNodes },
     };
 
     std::vector<TestResult> results;

@@ -31,27 +31,37 @@ OpSpec opSpecFor(const std::string& op)
     if (op == "msg")
         return { PortRate::event, {} };
     if (op == "obj")
-        return { PortRate::audio, { { "in", PortRate::audio, true } } };
+        return { PortRate::audio, { { "in", PortRate::audio, true } }, 0 };
     if (op == "input")
         return { PortRate::audio, {} };
     if (op == "control")
         return { PortRate::control, {} };
-    if (op == "sin" || op == "saw")
-        return { PortRate::audio, { { "freq", PortRate::control, true } } };
+    if (op == "sin" || op == "saw" || op == "tri")
+        return { PortRate::audio, { { "freq", PortRate::control, true } }, 0 };
     if (op == "square")
-        return { PortRate::audio, { { "freq", PortRate::control, true }, { "duty", PortRate::control, true } } };
+        return { PortRate::audio, { { "freq", PortRate::control, true }, { "duty", PortRate::control, true } }, 0 };
     if (op == "noise")
-        return { PortRate::audio, { { "amp", PortRate::control, true } } };
+        return { PortRate::audio, { { "amp", PortRate::control, true } }, 0 };
     if (op == "lpf" || op == "hpf")
-        return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::control, true } } };
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::control, true } }, 0 };
+    if (op == "clip")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "lo", PortRate::control, true }, { "hi", PortRate::control, true } }, 0 };
+    if (op == "tanh")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "drive", PortRate::control, true } }, 0 };
+    if (op == "slew")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "rate", PortRate::control, true } }, 0 };
+    if (op == "mtof")
+        return { PortRate::control, { { "midi", PortRate::control, false } }, 0 };
     if (op == "delay1")
-        return { PortRate::audio, { { "in", PortRate::audio, false } } };
+        return { PortRate::audio, { { "in", PortRate::audio, false } }, 0 };
     if (op == "scope" || op == "spectrum")
-        return { PortRate::audio, { { "in", PortRate::audio, false } } };
+        return { PortRate::audio, { { "in", PortRate::audio, false } }, 0 };
     if (op == "out")
-        return { PortRate::audio, { { "bus", PortRate::control, false }, { "signal", PortRate::audio, false } } };
-    if (op == "add" || op == "sub" || op == "mul" || op == "div")
-        return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::audio, false } } };
+        return { PortRate::audio, { { "bus", PortRate::control, false }, { "signal", PortRate::audio, false } }, 1 };
+    if (op == "add" || op == "sub" || op == "mul" || op == "div" || op == "pow" || op == "mod")
+        return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::audio, false } }, 0 };
+    if (op == "cadd" || op == "csub" || op == "cmul" || op == "cdiv")
+        return { PortRate::control, { { "hot", PortRate::control, false }, { "cold", PortRate::control, false } }, 0 };
     return { PortRate::audio, { { "in", PortRate::audio, true } } };
 }
 

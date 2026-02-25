@@ -26,12 +26,16 @@ public:
     void clearSelection();
     void selectAllNodes();
     void deleteSelectedNodes();
+    bool deleteSelection();
+    bool hasAnySelection() const;
     void beginInlineEdit(const std::string& nodeId);
 
     std::function<void(const std::string&)> onNodeSelectionChanged;
     std::function<void(const std::string&, juce::Point<float>)> onAddNodeRequested;
     std::function<void(const std::string&, const std::string&, int)> onConnectRequested;
     std::function<void(const std::string&)> onDeleteNodeRequested;
+    std::function<void(const std::vector<std::string>&)> onDeleteNodesRequested;
+    std::function<void(const std::vector<ir::Edge>&)> onDeleteEdgesRequested;
     std::function<void(const std::string&, juce::Point<float>)> onNodeMoved;
     std::function<void(const std::string&, const std::string&)> onNodeTextEditRequested;
 
@@ -60,10 +64,12 @@ private:
         NodeStyle style = NodeStyle::object;
         juce::Rectangle<float> bounds;
         std::vector<ir::PortRate> inputRates;
+        std::vector<bool> inputHot;
         ir::PortRate outputRate = ir::PortRate::audio;
     };
 
     std::optional<size_t> hitNode(juce::Point<float> p) const;
+    std::optional<size_t> hitEdge(juce::Point<float> p) const;
     std::optional<int> hitInputPort(const NodeVisual& visual, juce::Point<float> p) const;
     bool hitOutputPort(const NodeVisual& visual, juce::Point<float> p) const;
     juce::Point<float> inputPortPosition(const NodeVisual& visual, int port) const;
@@ -81,13 +87,17 @@ private:
     ir::Graph graph;
     std::vector<NodeVisual> visuals;
     std::unordered_set<std::string> selectedNodeIds;
+    std::vector<ir::Edge> selectedEdges;
     std::optional<std::string> primarySelectedNodeId;
 
     std::optional<size_t> draggingNode;
+    std::optional<size_t> pendingDragNode;
     juce::Point<float> dragStartWorld;
     std::unordered_map<std::string, juce::Point<float>> dragStartPositions;
 
     bool marqueeSelecting = false;
+    bool pendingMarqueeStart = false;
+    bool pendingMarqueeClearsSelection = false;
     juce::Point<float> marqueeStart;
     juce::Point<float> marqueeCurrent;
     std::unordered_set<std::string> marqueeBaseSelection;
@@ -100,6 +110,9 @@ private:
     juce::Point<float> liveMouse;
     float zoom = 1.0f;
     juce::Point<float> panOffset { 24.0f, 24.0f };
+    bool pendingFloatatomEdit = false;
+    std::string pendingFloatatomNodeId;
+    juce::Point<float> pendingFloatatomMouseDown;
 
     juce::TextEditor inlineEditor;
     std::optional<std::string> editingNodeId;

@@ -76,7 +76,7 @@ private:
 
     void timerCallback() override;
     void compileFromText();
-    void setCodeContent(const juce::String& content);
+    void setCodeContent(const juce::String& content, bool queueCompile = true);
     void applyGraphMutation(const std::function<void(duodsp::ir::Graph&)>& mutator, bool pushHistorySnapshot = true);
     void syncCanvasFromGraph();
     void updateSelectionRail(const juce::String& text);
@@ -96,6 +96,7 @@ private:
     void editDuplicate();
     void editDelete();
     void editSelectAll();
+    void deleteGraphNodesById(const std::vector<std::string>& ids);
 
     duodsp::visual::GraphCanvas graphCanvas;
     juce::MenuBarComponent menuBar { this };
@@ -113,6 +114,7 @@ private:
     duodsp::ui::SpectrumWidget spectrumWidget;
 
     duodsp::ir::Graph currentGraph;
+    std::optional<duodsp::ir::Graph> preferredPreviousGraphForCompile;
     duodsp::sync::SyncMap currentSyncMap;
     duodsp::dsp::RuntimeEngine runtime;
     std::unordered_map<std::string, juce::Point<float>> nodeLayout;

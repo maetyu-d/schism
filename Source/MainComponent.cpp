@@ -61,6 +61,12 @@ MainComponent::MainComponent()
             suppressEditorEvents = false;
             updateSelectionRail("Node: " + juce::String(nodeId));
         }
+        else
+        {
+            suppressEditorEvents = true;
+            codeEditor.setHighlightedRegion({ 0, 0 });
+            suppressEditorEvents = false;
+        }
     };
 
     graphCanvas.onAddNodeRequested = [this](const std::string& op, const juce::Point<float> pos)
@@ -68,16 +74,55 @@ MainComponent::MainComponent()
         applyGraphMutation([&](duodsp::ir::Graph& graph)
         {
             const auto id = nextNodeId(op);
-            graph.nodes.push_back({ id, op, op, std::nullopt });
-            const auto spec = duodsp::ir::opSpecFor(op);
-
-            if (op == "sin" || op == "saw")
+            auto defaultPdLabel = [](const std::string& o) -> std::string
             {
-                const auto c = nextNodeId("constant");
-                graph.nodes.push_back({ c, "constant", "220", 220.0 });
-                graph.edges.push_back({ c, id, 0 });
-            }
-            else if (op == "floatatom")
+                if (o == "sin")
+                    return "osc~ 220";
+                if (o == "saw")
+                    return "phasor~ 110";
+                if (o == "tri")
+                    return "tri~ 110";
+                if (o == "noise")
+                    return "noise~ 0.05";
+                if (o == "lpf")
+                    return "lop~ 1200";
+                if (o == "hpf")
+                    return "hip~ 1200";
+                if (o == "clip")
+                    return "clip~ -1 1";
+                if (o == "tanh")
+                    return "tanh~ 1";
+                if (o == "slew")
+                    return "slew~ 50";
+                if (o == "mtof")
+                    return "mtof 69";
+                if (o == "out")
+                    return "dac~";
+                if (o == "add")
+                    return "+~";
+                if (o == "sub")
+                    return "-~";
+                if (o == "mul")
+                    return "*~";
+                if (o == "div")
+                    return "/~";
+                if (o == "pow")
+                    return "pow~ 2";
+                if (o == "mod")
+                    return "mod~ 1";
+                if (o == "cadd")
+                    return "+";
+                if (o == "csub")
+                    return "-";
+                if (o == "cmul")
+                    return "*";
+                if (o == "cdiv")
+                    return "/";
+                return o;
+            };
+            graph.nodes.push_back({ id, op, defaultPdLabel(op), std::nullopt });
+
+            if (op == "floatatom")
             {
                 if (!graph.nodes.empty())
                     graph.nodes.back().literal = 0.0;
@@ -94,37 +139,6 @@ MainComponent::MainComponent()
                 if (!graph.nodes.empty())
                     graph.nodes.back().label = "obj";
                 pendingInlineEditNodeId = id;
-            }
-            else if (op == "square")
-            {
-                const auto freq = nextNodeId("constant");
-                graph.nodes.push_back({ freq, "constant", "110", 110.0 });
-                graph.edges.push_back({ freq, id, 0 });
-                const auto duty = nextNodeId("constant");
-                graph.nodes.push_back({ duty, "constant", "0.5", 0.5 });
-                graph.edges.push_back({ duty, id, 1 });
-            }
-            else if (op == "noise")
-            {
-                const auto c = nextNodeId("constant");
-                graph.nodes.push_back({ c, "constant", "0.05", 0.05 });
-                graph.edges.push_back({ c, id, 0 });
-            }
-            else if (op == "lpf" || op == "hpf")
-            {
-                const auto c = nextNodeId("constant");
-                graph.nodes.push_back({ c, "constant", "1200", 1200.0 });
-                graph.edges.push_back({ c, id, 1 });
-            }
-            else if (op == "out")
-            {
-                const auto bus = nextNodeId("constant");
-                graph.nodes.push_back({ bus, "constant", "0", 0.0 });
-                graph.edges.push_back({ bus, id, 0 });
-            }
-            else
-            {
-                juce::ignoreUnused(spec);
             }
 
             if (op != "out" && op != "constant")
@@ -146,6 +160,73 @@ MainComponent::MainComponent()
                     const auto v = std::strtod(text.c_str(), nullptr);
                     n->literal = v;
                     n->label = text;
+                }
+                else
+                {
+                    const auto trimmed = juce::String(text).trim().toStdString();
+                    if (trimmed.empty())
+                        return;
+
+                    const auto space = trimmed.find(' ');
+                    const auto head = space == std::string::npos ? trimmed : trimmed.substr(0, space);
+                    auto mapPdHeadToOp = [](const std::string& h) -> std::string
+                    {
+                        if (h == "osc~")
+                            return "sin";
+                        if (h == "phasor~")
+                            return "saw";
+                        if (h == "tri~")
+                            return "tri";
+                        if (h == "noise~")
+                            return "noise";
+                        if (h == "lop~")
+                            return "lpf";
+                        if (h == "hip~")
+                            return "hpf";
+                        if (h == "clip~")
+                            return "clip";
+                        if (h == "tanh~")
+                            return "tanh";
+                        if (h == "slew~")
+                            return "slew";
+                        if (h == "mtof")
+                            return "mtof";
+                        if (h == "dac~")
+                            return "out";
+                        if (h == "+~")
+                            return "add";
+                        if (h == "-~")
+                            return "sub";
+                        if (h == "*~")
+                            return "mul";
+                        if (h == "/~")
+                            return "div";
+                        if (h == "+")
+                            return "cadd";
+                        if (h == "-")
+                            return "csub";
+                        if (h == "*")
+                            return "cmul";
+                        if (h == "/")
+                            return "cdiv";
+                        return {};
+                    };
+
+                    const auto mapped = mapPdHeadToOp(head);
+                    if (!mapped.empty())
+                    {
+                        n->op = mapped;
+                        n->label = trimmed;
+                    }
+                    else if (n->op == "obj")
+                    {
+                        n->label = trimmed;
+                    }
+                    else
+                    {
+                        // For typed DSP/control objects, keep current op and treat text as parameterized label.
+                        n->label = trimmed;
+                    }
                 }
             }
         });
@@ -171,22 +252,21 @@ MainComponent::MainComponent()
 
     graphCanvas.onDeleteNodeRequested = [this](const std::string& nodeId)
     {
+        deleteGraphNodesById({ nodeId });
+    };
+    graphCanvas.onDeleteNodesRequested = [this](const std::vector<std::string>& ids) { deleteGraphNodesById(ids); };
+    graphCanvas.onDeleteEdgesRequested = [this](const std::vector<duodsp::ir::Edge>& edges)
+    {
+        if (edges.empty())
+            return;
         applyGraphMutation([&](duodsp::ir::Graph& graph)
         {
-            graph.nodes.erase(std::remove_if(graph.nodes.begin(), graph.nodes.end(), [&](const auto& n)
-                             { return n.id == nodeId; }),
-                              graph.nodes.end());
             graph.edges.erase(std::remove_if(graph.edges.begin(), graph.edges.end(), [&](const auto& e)
-                             { return e.fromNodeId == nodeId || e.toNodeId == nodeId; }),
+                             {
+                                 return std::find_if(edges.begin(), edges.end(), [&](const auto& d)
+                                                    { return d.fromNodeId == e.fromNodeId && d.toNodeId == e.toNodeId && d.toPort == e.toPort; }) != edges.end();
+                             }),
                               graph.edges.end());
-            for (auto it = graph.bindings.begin(); it != graph.bindings.end();)
-            {
-                if (it->second == nodeId)
-                    it = graph.bindings.erase(it);
-                else
-                    ++it;
-            }
-            nodeLayout.erase(nodeId);
         });
     };
 
@@ -205,11 +285,7 @@ MainComponent::MainComponent()
     syncLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
 
-    setCodeContent(
-        "osc = sin(220);\n"
-        "amp = 0.2;\n"
-        "sig = osc * amp;\n"
-        "out(0, sig);\n");
+    setCodeContent("");
 
     setSize(1320, 860);
     setAudioChannels(0, 2);
@@ -256,6 +332,34 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* origi
         if (code == 'z')
         {
             undo();
+            return true;
+        }
+        if (code == 'c')
+        {
+            editCopy();
+            return true;
+        }
+        if (code == 'x')
+        {
+            editCut();
+            return true;
+        }
+        if (code == 'v')
+        {
+            editPaste();
+            return true;
+        }
+        if (code == 'a')
+        {
+            editSelectAll();
+            return true;
+        }
+    }
+    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
+    {
+        if (!codeEditor.hasKeyboardFocus(true) && graphCanvas.hasAnySelection())
+        {
+            graphCanvas.deleteSelection();
             return true;
         }
     }
@@ -313,6 +417,7 @@ void MainComponent::codeDocumentTextInserted(const juce::String&, int)
 {
     if (!suppressEditorEvents)
     {
+        preferredPreviousGraphForCompile.reset();
         compilePending = true;
         textEditedSinceLastCompile = true;
         lastTextEditTimeMs = juce::Time::getMillisecondCounterHiRes();
@@ -324,6 +429,7 @@ void MainComponent::codeDocumentTextDeleted(int, int)
 {
     if (!suppressEditorEvents)
     {
+        preferredPreviousGraphForCompile.reset();
         compilePending = true;
         textEditedSinceLastCompile = true;
         lastTextEditTimeMs = juce::Time::getMillisecondCounterHiRes();
@@ -348,6 +454,11 @@ void MainComponent::timerCallback()
             graphCanvas.selectNodeById(range->nodeId);
             updateSelectionRail("Code -> Node: " + juce::String(range->nodeId));
         }
+        else
+        {
+            graphCanvas.clearSelection();
+            updateSelectionRail("Code");
+        }
     }
 
     const auto scopeProbe = scopeProbeSelect.getText().toStdString();
@@ -363,12 +474,12 @@ void MainComponent::timerCallback()
         spectrumWidget.setBins(runtime.getSpectrumSnapshotForProbe(spectrumProbe, 48));
 }
 
-void MainComponent::setCodeContent(const juce::String& content)
+void MainComponent::setCodeContent(const juce::String& content, const bool queueCompile)
 {
     suppressEditorEvents = true;
     codeDocument.replaceAllContent(content);
     suppressEditorEvents = false;
-    compilePending = true;
+    compilePending = queueCompile;
 }
 
 void MainComponent::pushHistorySnapshot(const bool allowCoalesceTextEdit)
@@ -437,6 +548,20 @@ void MainComponent::applyGraphMutation(const std::function<void(duodsp::ir::Grap
     auto mutated = currentGraph;
     mutator(mutated);
 
+    std::unordered_set<std::string> nodeIds;
+    for (const auto& n : mutated.nodes)
+        nodeIds.insert(n.id);
+    mutated.edges.erase(std::remove_if(mutated.edges.begin(), mutated.edges.end(), [&](const auto& e)
+                       { return !nodeIds.contains(e.fromNodeId) || !nodeIds.contains(e.toNodeId); }),
+                        mutated.edges.end());
+    for (auto it = mutated.bindings.begin(); it != mutated.bindings.end();)
+    {
+        if (!nodeIds.contains(it->second))
+            it = mutated.bindings.erase(it);
+        else
+            ++it;
+    }
+
     const auto issues = duodsp::ir::validateGraph(mutated);
     if (!issues.empty())
     {
@@ -476,8 +601,61 @@ void MainComponent::applyGraphMutation(const std::function<void(duodsp::ir::Grap
         }
     }
 
-    pendingEditOrigin = EditOrigin::visual;
-    setCodeContent(juce::String(duodsp::text::prettyPrint(mutated)));
+    currentGraph = mutated;
+
+    const auto pretty = juce::String(duodsp::text::prettyPrint(mutated));
+    setCodeContent(pretty, false);
+    compilePending = false;
+
+    currentSyncMap.clear();
+    const auto prettyStd = pretty.toStdString();
+    std::vector<std::pair<std::string, std::string>> bindingPairs;
+    for (const auto& b : currentGraph.bindings)
+        bindingPairs.push_back(b);
+    std::sort(bindingPairs.begin(), bindingPairs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    size_t cursor = 0;
+    for (const auto& [name, nodeId] : bindingPairs)
+    {
+        const auto needle = name + " = ";
+        auto pos = prettyStd.find(needle, cursor);
+        if (pos == std::string::npos)
+            pos = prettyStd.find(needle);
+        if (pos == std::string::npos)
+            continue;
+        auto end = prettyStd.find(';', pos);
+        if (end == std::string::npos)
+            end = pos + needle.size();
+        currentSyncMap.addRange(nodeId, static_cast<int>(pos), static_cast<int>(end + 1));
+        cursor = end + 1;
+    }
+
+    size_t outCursor = 0;
+    for (const auto& n : currentGraph.nodes)
+    {
+        if (n.op != "out")
+            continue;
+        auto pos = prettyStd.find("dac~(", outCursor);
+        if (pos == std::string::npos)
+            pos = prettyStd.find("out(", outCursor);
+        if (pos == std::string::npos)
+            break;
+        auto end = prettyStd.find(';', pos);
+        if (end == std::string::npos)
+            end = pos + 4;
+        currentSyncMap.addRange(n.id, static_cast<int>(pos), static_cast<int>(end + 1));
+        outCursor = end + 1;
+    }
+
+    syncCanvasFromGraph();
+    runtime.setGraph(currentGraph);
+    refreshProbeSelectors();
+    pendingEditOrigin = EditOrigin::none;
+    textEditedSinceLastCompile = false;
+
+    pushHistorySnapshot(false);
+    statusLabel.setText("Patched", juce::dontSendNotification);
+    statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
 }
 
 void MainComponent::refreshProbeSelectors()
@@ -556,11 +734,7 @@ void MainComponent::newPatch()
     history.clear();
     historyIndex = 0;
     hasCommittedInitialSnapshot = false;
-    setCodeContent(
-        "osc = sin(220);\n"
-        "amp = 0.2;\n"
-        "sig = osc * amp;\n"
-        "out(0, sig);\n");
+    setCodeContent("");
     compileFromText();
     compilePending = false;
     statusLabel.setText("New patch", juce::dontSendNotification);
@@ -709,7 +883,10 @@ void MainComponent::editCopy()
 
     const auto selected = graphCanvas.getSelectedNodeIds();
     if (selected.empty())
+    {
+        graphCanvas.deleteSelection();
         return;
+    }
 
     std::unordered_set<std::string> selectedSet(selected.begin(), selected.end());
     NodeClipboard clip;
@@ -796,8 +973,26 @@ void MainComponent::editDelete()
     const auto selected = graphCanvas.getSelectedNodeIds();
     if (selected.empty())
         return;
+    deleteGraphNodesById(selected);
+    graphCanvas.clearSelection();
+}
 
-    std::unordered_set<std::string> selectedSet(selected.begin(), selected.end());
+void MainComponent::editSelectAll()
+{
+    if (codeEditor.hasKeyboardFocus(true))
+    {
+        codeEditor.selectAll();
+        return;
+    }
+    graphCanvas.selectAllNodes();
+}
+
+void MainComponent::deleteGraphNodesById(const std::vector<std::string>& ids)
+{
+    if (ids.empty())
+        return;
+
+    std::unordered_set<std::string> selectedSet(ids.begin(), ids.end());
     applyGraphMutation([&](duodsp::ir::Graph& graph)
     {
         graph.nodes.erase(std::remove_if(graph.nodes.begin(), graph.nodes.end(), [&](const auto& n)
@@ -813,26 +1008,17 @@ void MainComponent::editDelete()
             else
                 ++it;
         }
-        for (const auto& id : selected)
+        for (const auto& id : ids)
             nodeLayout.erase(id);
     });
-    graphCanvas.clearSelection();
-}
-
-void MainComponent::editSelectAll()
-{
-    if (codeEditor.hasKeyboardFocus(true))
-    {
-        codeEditor.selectAll();
-        return;
-    }
-    graphCanvas.selectAllNodes();
 }
 
 void MainComponent::compileFromText()
 {
     const auto source = codeDocument.getAllContent().toStdString();
-    const auto result = duodsp::text::compile(source, &currentGraph);
+    const auto* previousGraph = preferredPreviousGraphForCompile.has_value() ? &(*preferredPreviousGraphForCompile) : &currentGraph;
+    const auto result = duodsp::text::compile(source, previousGraph);
+    preferredPreviousGraphForCompile.reset();
     currentGraph = result.graph;
     currentSyncMap = result.syncMap;
 

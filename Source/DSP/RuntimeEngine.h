@@ -35,6 +35,7 @@ private:
     {
         ir::Node node;
         std::vector<int> inputIndices;
+        std::vector<float> paramDefaults;
         float stateA = 0.0f;
         float stateB = 0.0f;
     };

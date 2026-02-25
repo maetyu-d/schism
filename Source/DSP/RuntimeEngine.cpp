@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
+#include <limits>
 #include <queue>
+#include <sstream>
 
 namespace duodsp::dsp
 {
@@ -49,6 +52,32 @@ std::vector<float> spectrumFromSamples(const std::vector<float>& samples, const 
     }
     return out;
 }
+
+std::vector<float> parseLabelNumbers(const std::string& label)
+{
+    std::vector<float> vals;
+    if (label.empty())
+        return vals;
+
+    std::istringstream iss(label);
+    std::string tok;
+    while (iss >> tok)
+    {
+        char* end = nullptr;
+        const auto v = std::strtof(tok.c_str(), &end);
+        if (end != tok.c_str() && end != nullptr && *end == '\0')
+            vals.push_back(v);
+    }
+    if (!vals.empty())
+        return vals;
+
+    // Support numeric-only labels like "440" for quick Pd-style value entry.
+    char* end = nullptr;
+    const auto v = std::strtof(label.c_str(), &end);
+    if (end != label.c_str() && end != nullptr && *end == '\0')
+        vals.push_back(v);
+    return vals;
+}
 } // namespace
 
 RuntimeEngine::RuntimeEngine() = default;
@@ -76,6 +105,9 @@ std::unique_ptr<RuntimeEngine::CompiledGraph> RuntimeEngine::compileGraph(const 
     {
         RuntimeNode rn;
         rn.node = graph.nodes[i];
+        rn.paramDefaults = parseLabelNumbers(rn.node.label);
+        if (rn.node.op == "cadd" || rn.node.op == "csub" || rn.node.op == "cmul" || rn.node.op == "cdiv")
+            rn.stateB = std::numeric_limits<float>::quiet_NaN(); // last hot input for Pd-like hot/cold behavior
         compiled->indexByNodeId[rn.node.id] = i;
         compiled->nodes.push_back(std::move(rn));
     }
@@ -224,6 +256,12 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
             return fallback;
         return values[static_cast<size_t>(inputIndex)];
     };
+    auto defaultAt = [&](const size_t idx, const float fallback) -> float
+    {
+        if (idx < n.paramDefaults.size())
+            return n.paramDefaults[idx];
+        return fallback;
+    };
 
     if (n.node.op == "constant")
         return static_cast<float>(n.node.literal.value_or(0.0));
@@ -236,44 +274,105 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
     if (n.node.op == "input" || n.node.op == "control")
         return 0.0f;
     if (n.node.op == "add")
-        return inputAt(0) + inputAt(1);
+        return inputAt(0) + inputAt(1, defaultAt(0, 0.0f));
     if (n.node.op == "sub")
-        return inputAt(0) - inputAt(1);
+        return inputAt(0) - inputAt(1, defaultAt(0, 0.0f));
     if (n.node.op == "mul")
-        return inputAt(0) * inputAt(1, 1.0f);
+        return inputAt(0) * inputAt(1, defaultAt(0, 1.0f));
     if (n.node.op == "div")
-        return inputAt(1) == 0.0f ? 0.0f : inputAt(0) / inputAt(1);
+    {
+        const auto d = inputAt(1, defaultAt(0, 1.0f));
+        return d == 0.0f ? 0.0f : inputAt(0) / d;
+    }
+    if (n.node.op == "cadd")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = hot + cold;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "csub")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = hot - cold;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "cmul")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 1.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = hot * cold;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "cdiv")
+    {
+        const auto hot = inputAt(0);
+        const auto d = inputAt(1, defaultAt(0, 1.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = d == 0.0f ? 0.0f : hot / d;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "pow")
+        return std::pow(inputAt(0), inputAt(1, defaultAt(0, 1.0f)));
+    if (n.node.op == "mod")
+    {
+        const auto d = inputAt(1, defaultAt(0, 1.0f));
+        return d == 0.0f ? 0.0f : std::fmod(inputAt(0), d);
+    }
     if (n.node.op == "sin")
     {
-        const auto freq = juce::jmax(1.0f, inputAt(0, 220.0f));
+        const auto freq = juce::jmax(1.0f, inputAt(0, defaultAt(0, 220.0f)));
         n.stateA += freq / static_cast<float>(sampleRate);
         n.stateA -= std::floor(n.stateA);
         return std::sin(n.stateA * 2.0f * juce::MathConstants<float>::pi);
     }
     if (n.node.op == "saw")
     {
-        const auto freq = juce::jmax(1.0f, inputAt(0, 110.0f));
+        const auto freq = juce::jmax(1.0f, inputAt(0, defaultAt(0, 110.0f)));
         n.stateA += freq / static_cast<float>(sampleRate);
         n.stateA -= std::floor(n.stateA);
         return n.stateA * 2.0f - 1.0f;
     }
+    if (n.node.op == "tri")
+    {
+        const auto freq = juce::jmax(1.0f, inputAt(0, defaultAt(0, 110.0f)));
+        n.stateA += freq / static_cast<float>(sampleRate);
+        n.stateA -= std::floor(n.stateA);
+        return 4.0f * std::fabs(n.stateA - 0.5f) - 1.0f;
+    }
     if (n.node.op == "square")
     {
-        const auto freq = juce::jmax(1.0f, inputAt(0, 110.0f));
-        const auto duty = juce::jlimit(0.01f, 0.99f, inputAt(1, 0.5f));
+        const auto freq = juce::jmax(1.0f, inputAt(0, defaultAt(0, 110.0f)));
+        const auto duty = juce::jlimit(0.01f, 0.99f, inputAt(1, defaultAt(1, 0.5f)));
         n.stateA += freq / static_cast<float>(sampleRate);
         n.stateA -= std::floor(n.stateA);
         return n.stateA < duty ? 1.0f : -1.0f;
     }
     if (n.node.op == "noise")
     {
-        const auto amp = inputAt(0, 0.05f);
+        const auto amp = inputAt(0, defaultAt(0, 0.05f));
         return random.nextFloat() * 2.0f * amp - amp;
     }
     if (n.node.op == "lpf")
     {
         const auto input = inputAt(0);
-        const auto cutoff = juce::jlimit(20.0f, 20000.0f, inputAt(1, 1200.0f));
+        const auto cutoff = juce::jlimit(20.0f, 20000.0f, inputAt(1, defaultAt(0, 1200.0f)));
         const auto alpha = std::exp(-2.0f * juce::MathConstants<float>::pi * cutoff / static_cast<float>(sampleRate));
         n.stateA = (1.0f - alpha) * input + alpha * n.stateA;
         return n.stateA;
@@ -281,13 +380,27 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
     if (n.node.op == "hpf")
     {
         const auto input = inputAt(0);
-        const auto cutoff = juce::jlimit(20.0f, 20000.0f, inputAt(1, 1200.0f));
+        const auto cutoff = juce::jlimit(20.0f, 20000.0f, inputAt(1, defaultAt(0, 1200.0f)));
         const auto alpha = std::exp(-2.0f * juce::MathConstants<float>::pi * cutoff / static_cast<float>(sampleRate));
         const auto out = alpha * (n.stateA + input - n.stateB);
         n.stateA = out;
         n.stateB = input;
         return out;
     }
+    if (n.node.op == "clip")
+        return juce::jlimit(inputAt(1, defaultAt(0, -1.0f)), inputAt(2, defaultAt(1, 1.0f)), inputAt(0));
+    if (n.node.op == "tanh")
+        return std::tanh(inputAt(0) * inputAt(1, defaultAt(0, 1.0f)));
+    if (n.node.op == "slew")
+    {
+        const auto target = inputAt(0);
+        const auto hz = juce::jlimit(0.1f, 20000.0f, inputAt(1, defaultAt(0, 50.0f)));
+        const auto alpha = 1.0f - std::exp(-2.0f * juce::MathConstants<float>::pi * hz / static_cast<float>(sampleRate));
+        n.stateA += (target - n.stateA) * alpha;
+        return n.stateA;
+    }
+    if (n.node.op == "mtof")
+        return 440.0f * std::pow(2.0f, (inputAt(0, defaultAt(0, 69.0f)) - 69.0f) / 12.0f);
     if (n.node.op == "delay1")
     {
         const auto out = n.stateA;
@@ -318,11 +431,8 @@ float RuntimeEngine::processSingleSample(CompiledGraph& graph, const int sampleI
         (*values)[i] = runNode(graph.nodes[i], *values, sampleIndex, currentSampleRate, noise);
 
     float outValue = 0.0f;
-    if (graph.outputNodes.empty() && !graph.nodes.empty())
-        outValue = (*values).back();
-    else
-        for (const auto idx : graph.outputNodes)
-            outValue += (*values)[idx];
+    for (const auto idx : graph.outputNodes)
+        outValue += (*values)[idx];
     return outValue;
 }
 
