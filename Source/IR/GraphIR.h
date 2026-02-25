@@ -11,7 +11,8 @@ enum class PortRate
 {
     audio,
     control,
-    event
+    event,
+    any
 };
 
 struct Node

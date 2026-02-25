@@ -28,6 +28,8 @@ OpSpec opSpecFor(const std::string& op)
         return { PortRate::control, {} };
     if (op == "floatatom")
         return { PortRate::control, {} };
+    if (op == "bang")
+        return { PortRate::control, { { "trig", PortRate::any, true } }, 0 };
     if (op == "msg")
         return { PortRate::event, {} };
     if (op == "obj")
@@ -37,28 +39,70 @@ OpSpec opSpecFor(const std::string& op)
     if (op == "control")
         return { PortRate::control, {} };
     if (op == "sin" || op == "saw" || op == "tri")
-        return { PortRate::audio, { { "freq", PortRate::control, true } }, 0 };
+        return { PortRate::audio, { { "freq", PortRate::any, true } }, 0 };
     if (op == "square")
-        return { PortRate::audio, { { "freq", PortRate::control, true }, { "duty", PortRate::control, true } }, 0 };
+        return { PortRate::audio, { { "freq", PortRate::any, true }, { "duty", PortRate::control, true } }, 0 };
     if (op == "noise")
         return { PortRate::audio, { { "amp", PortRate::control, true } }, 0 };
     if (op == "lpf" || op == "hpf")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::control, true } }, 0 };
+    if (op == "lores")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::any, true }, { "res", PortRate::control, true } }, 0 };
+    if (op == "bpf")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::any, true }, { "q", PortRate::control, true } }, 0 };
+    if (op == "svf")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::any, true }, { "q", PortRate::control, true }, { "mode", PortRate::control, true } }, 0 };
+    if (op == "delay")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "ms", PortRate::any, true } }, 0 };
+    if (op == "cdelay")
+        return { PortRate::control, { { "in", PortRate::control, false }, { "ms", PortRate::control, true } }, 0 };
+    if (op == "apf")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "ms", PortRate::any, true }, { "feedback", PortRate::control, true } }, 0 };
+    if (op == "comb")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "ms", PortRate::any, true }, { "feedback", PortRate::control, true } }, 0 };
     if (op == "clip")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "lo", PortRate::control, true }, { "hi", PortRate::control, true } }, 0 };
     if (op == "tanh")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "drive", PortRate::control, true } }, 0 };
     if (op == "slew")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "rate", PortRate::control, true } }, 0 };
+    if (op == "sah")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "trig", PortRate::any, false } }, 1 };
     if (op == "mtof")
         return { PortRate::control, { { "midi", PortRate::control, false } }, 0 };
+    if (op == "mtof_sig")
+        return { PortRate::audio, { { "midi", PortRate::any, false } }, 0 };
     if (op == "delay1")
         return { PortRate::audio, { { "in", PortRate::audio, false } }, 0 };
     if (op == "scope" || op == "spectrum")
         return { PortRate::audio, { { "in", PortRate::audio, false } }, 0 };
     if (op == "out")
-        return { PortRate::audio, { { "bus", PortRate::control, false }, { "signal", PortRate::audio, false } }, 1 };
-    if (op == "add" || op == "sub" || op == "mul" || op == "div" || op == "pow" || op == "mod")
+        return { PortRate::audio, { { "left", PortRate::audio, true }, { "right", PortRate::audio, true } }, 0 };
+    if (op == "comp_sig")
+        return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::any, true } }, 0 };
+    if (op == "comp")
+        return { PortRate::control, { { "hot", PortRate::control, false }, { "cold", PortRate::control, true } }, 0 };
+    if (op == "abs_sig")
+        return { PortRate::audio, { { "in", PortRate::audio, false } }, 0 };
+    if (op == "abs")
+        return { PortRate::control, { { "in", PortRate::control, false } }, 0 };
+    if (op == "random")
+        return { PortRate::control, { { "trig", PortRate::any, true }, { "lo", PortRate::control, true }, { "hi", PortRate::control, true } }, 0 };
+    if (op == "min_sig" || op == "max_sig")
+        return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::any, true } }, 0 };
+    if (op == "min" || op == "max")
+        return { PortRate::control, { { "hot", PortRate::control, false }, { "cold", PortRate::control, true } }, 0 };
+    if (op == "and_sig" || op == "or_sig" || op == "xor_sig")
+        return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::any, true } }, 0 };
+    if (op == "not_sig")
+        return { PortRate::audio, { { "in", PortRate::audio, false } }, 0 };
+    if (op == "and" || op == "or" || op == "xor")
+        return { PortRate::control, { { "hot", PortRate::control, false }, { "cold", PortRate::control, true } }, 0 };
+    if (op == "not")
+        return { PortRate::control, { { "in", PortRate::control, false } }, 0 };
+    if (op == "add" || op == "sub" || op == "mul")
+        return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::any, true } }, 0 };
+    if (op == "div" || op == "pow" || op == "mod")
         return { PortRate::audio, { { "a", PortRate::audio, false }, { "b", PortRate::audio, false } }, 0 };
     if (op == "cadd" || op == "csub" || op == "cmul" || op == "cdiv")
         return { PortRate::control, { { "hot", PortRate::control, false }, { "cold", PortRate::control, false } }, 0 };
@@ -74,6 +118,8 @@ PortRate effectiveOutputRate(const Node& node)
 
 bool isConnectionRateCompatible(const PortRate outputRate, const PortRate inputRate)
 {
+    if (inputRate == PortRate::any)
+        return outputRate == PortRate::audio || outputRate == PortRate::control;
     if (inputRate == outputRate)
         return true;
     // Allow control -> audio for modulation convenience; keep audio -> control forbidden.
@@ -86,7 +132,7 @@ static bool hasCycleIgnoringDelay(const Graph& graph)
 {
     std::unordered_set<std::string> nonDelay;
     for (const auto& n : graph.nodes)
-        if (n.op != "delay1")
+        if (n.op != "delay1" && n.op != "delay" && n.op != "cdelay" && n.op != "apf" && n.op != "comb")
             nonDelay.insert(n.id);
 
     std::unordered_map<std::string, std::vector<std::string>> adjacency;

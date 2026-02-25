@@ -106,8 +106,15 @@ std::unique_ptr<RuntimeEngine::CompiledGraph> RuntimeEngine::compileGraph(const 
         RuntimeNode rn;
         rn.node = graph.nodes[i];
         rn.paramDefaults = parseLabelNumbers(rn.node.label);
-        if (rn.node.op == "cadd" || rn.node.op == "csub" || rn.node.op == "cmul" || rn.node.op == "cdiv")
+        if (rn.node.op == "cadd" || rn.node.op == "csub" || rn.node.op == "cmul" || rn.node.op == "cdiv" || rn.node.op == "comp"
+            || rn.node.op == "and" || rn.node.op == "or" || rn.node.op == "xor" || rn.node.op == "min" || rn.node.op == "max")
             rn.stateB = std::numeric_limits<float>::quiet_NaN(); // last hot input for Pd-like hot/cold behavior
+        if (rn.node.op == "delay" || rn.node.op == "cdelay" || rn.node.op == "comb" || rn.node.op == "apf")
+        {
+            const auto maxDelaySamples = juce::jmax(64, static_cast<int>(std::round(currentSampleRate * 5.0)));
+            rn.delayBuffer.assign(static_cast<size_t>(maxDelaySamples), 0.0f);
+            rn.delayWriteIndex = 0;
+        }
         compiled->indexByNodeId[rn.node.id] = i;
         compiled->nodes.push_back(std::move(rn));
     }
@@ -190,6 +197,14 @@ void RuntimeEngine::transferState(const CompiledGraph* from, CompiledGraph& to)
         {
             toNode.stateA = fromNode.stateA;
             toNode.stateB = fromNode.stateB;
+            toNode.stateC = fromNode.stateC;
+            toNode.stateD = fromNode.stateD;
+            if (!toNode.delayBuffer.empty() && !fromNode.delayBuffer.empty())
+            {
+                const auto copySize = juce::jmin(toNode.delayBuffer.size(), fromNode.delayBuffer.size());
+                std::copy_n(fromNode.delayBuffer.begin(), copySize, toNode.delayBuffer.begin());
+                toNode.delayWriteIndex = fromNode.delayWriteIndex % static_cast<int>(toNode.delayBuffer.size());
+            }
         }
     }
 }
@@ -245,6 +260,36 @@ void RuntimeEngine::setGraph(const ir::Graph& graph)
     spectrumProbeWriteIndices = std::move(nextSpectrumWrites);
 }
 
+void RuntimeEngine::triggerBang(const std::string& nodeId)
+{
+    const juce::ScopedLock lock(graphLock);
+    if (currentGraph == nullptr || !currentGraph->indexByNodeId.contains(nodeId))
+        return;
+    auto& n = currentGraph->nodes[currentGraph->indexByNodeId[nodeId]];
+    if (n.node.op == "bang")
+        n.stateA = 1.0f;
+}
+
+std::vector<std::string> RuntimeEngine::consumeTriggeredBangIds()
+{
+    std::vector<std::string> ids;
+    const juce::ScopedTryLock lock(graphLock);
+    if (!lock.isLocked() || currentGraph == nullptr)
+        return ids;
+
+    for (auto& n : currentGraph->nodes)
+    {
+        if (n.node.op != "bang")
+            continue;
+        if (n.stateC > 0.5f)
+        {
+            ids.push_back(n.node.id);
+            n.stateC = 0.0f;
+        }
+    }
+    return ids;
+}
+
 float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, const int sampleIndex, const double sampleRate, juce::Random& random)
 {
     auto inputAt = [&](const size_t idx, const float fallback = 0.0f) -> float
@@ -269,6 +314,32 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
         return static_cast<float>(n.node.literal.value_or(0.0));
     if (n.node.op == "msg")
         return 0.0f;
+    if (n.node.op == "bang")
+    {
+        const auto trigIn = inputAt(0, 0.0f);
+        const auto rising = trigIn > 0.5f && n.stateB <= 0.5f;
+        const auto out = (n.stateA > 0.5f || rising) ? 1.0f : 0.0f;
+        if (out > 0.5f)
+            n.stateC = 1.0f;
+        n.stateA = 0.0f;
+        n.stateB = trigIn;
+        return out;
+    }
+    if (n.node.op == "random")
+    {
+        const auto trig = inputAt(0, 0.0f);
+        const auto rising = trig > 0.5f && n.stateB <= 0.5f;
+        if (rising)
+        {
+            auto lo = inputAt(1, defaultAt(0, 0.0f));
+            auto hi = inputAt(2, defaultAt(1, 1.0f));
+            if (hi < lo)
+                std::swap(lo, hi);
+            n.stateA = lo + (hi - lo) * random.nextFloat();
+        }
+        n.stateB = trig;
+        return n.stateA;
+    }
     if (n.node.op == "obj")
         return inputAt(0);
     if (n.node.op == "input" || n.node.op == "control")
@@ -284,6 +355,92 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
         const auto d = inputAt(1, defaultAt(0, 1.0f));
         return d == 0.0f ? 0.0f : inputAt(0) / d;
     }
+    if (n.node.op == "comp_sig")
+        return inputAt(0) > inputAt(1, defaultAt(0, 0.0f)) ? 1.0f : 0.0f;
+    if (n.node.op == "abs_sig")
+        return std::abs(inputAt(0));
+    if (n.node.op == "min_sig")
+        return juce::jmin(inputAt(0), inputAt(1, defaultAt(0, 0.0f)));
+    if (n.node.op == "max_sig")
+        return juce::jmax(inputAt(0), inputAt(1, defaultAt(0, 0.0f)));
+    if (n.node.op == "and_sig")
+        return (inputAt(0) > 0.5f && inputAt(1, defaultAt(0, 0.0f)) > 0.5f) ? 1.0f : 0.0f;
+    if (n.node.op == "or_sig")
+        return (inputAt(0) > 0.5f || inputAt(1, defaultAt(0, 0.0f)) > 0.5f) ? 1.0f : 0.0f;
+    if (n.node.op == "xor_sig")
+        return ((inputAt(0) > 0.5f) != (inputAt(1, defaultAt(0, 0.0f)) > 0.5f)) ? 1.0f : 0.0f;
+    if (n.node.op == "not_sig")
+        return inputAt(0) > 0.5f ? 0.0f : 1.0f;
+    if (n.node.op == "comp")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = hot > cold ? 1.0f : 0.0f;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "abs")
+        return std::abs(inputAt(0));
+    if (n.node.op == "min")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = juce::jmin(hot, cold);
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "max")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = juce::jmax(hot, cold);
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "and")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = (hot > 0.5f && cold > 0.5f) ? 1.0f : 0.0f;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "or")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = (hot > 0.5f || cold > 0.5f) ? 1.0f : 0.0f;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "xor")
+    {
+        const auto hot = inputAt(0);
+        const auto cold = inputAt(1, defaultAt(0, 0.0f));
+        if (!std::isfinite(n.stateB) || std::abs(hot - n.stateB) > 1.0e-6f)
+        {
+            n.stateA = ((hot > 0.5f) != (cold > 0.5f)) ? 1.0f : 0.0f;
+            n.stateB = hot;
+        }
+        return n.stateA;
+    }
+    if (n.node.op == "not")
+        return inputAt(0) > 0.5f ? 0.0f : 1.0f;
     if (n.node.op == "cadd")
     {
         const auto hot = inputAt(0);
@@ -377,6 +534,20 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
         n.stateA = (1.0f - alpha) * input + alpha * n.stateA;
         return n.stateA;
     }
+    if (n.node.op == "lores")
+    {
+        const auto input = inputAt(0);
+        const auto cutoff = juce::jlimit(20.0f, 20000.0f, inputAt(1, defaultAt(0, 1200.0f)));
+        const auto res = juce::jlimit(0.0f, 4.0f, inputAt(2, defaultAt(1, 0.5f)));
+        const auto alpha = std::exp(-2.0f * juce::MathConstants<float>::pi * cutoff / static_cast<float>(sampleRate));
+        const auto g = 1.0f - alpha;
+        const auto x = std::tanh(input - n.stateD * res);
+        n.stateA += g * (x - n.stateA);
+        n.stateB += g * (n.stateA - n.stateB);
+        n.stateC += g * (n.stateB - n.stateC);
+        n.stateD += g * (n.stateC - n.stateD);
+        return n.stateD;
+    }
     if (n.node.op == "hpf")
     {
         const auto input = inputAt(0);
@@ -385,6 +556,55 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
         const auto out = alpha * (n.stateA + input - n.stateB);
         n.stateA = out;
         n.stateB = input;
+        return out;
+    }
+    if (n.node.op == "bpf" || n.node.op == "svf")
+    {
+        const auto input = inputAt(0);
+        const auto cutoff = juce::jlimit(20.0f, 20000.0f, inputAt(1, defaultAt(0, 1200.0f)));
+        const auto q = juce::jlimit(0.05f, 20.0f, inputAt(2, defaultAt(1, 0.7f)));
+        const auto f = 2.0f * std::sin(juce::MathConstants<float>::pi * cutoff / static_cast<float>(sampleRate));
+        n.stateA += f * n.stateB; // lp
+        const auto hp = input - n.stateA - (n.stateB / juce::jmax(0.05f, q));
+        n.stateB += f * hp; // bp
+        if (n.node.op == "bpf")
+            return n.stateB;
+        const auto mode = static_cast<int>(std::round(inputAt(3, defaultAt(2, 0.0f))));
+        if (mode == 1)
+            return n.stateB;
+        if (mode == 2)
+            return hp;
+        return n.stateA;
+    }
+    if (n.node.op == "delay" || n.node.op == "cdelay" || n.node.op == "comb" || n.node.op == "apf")
+    {
+        if (n.delayBuffer.empty())
+            return inputAt(0);
+        const auto in = inputAt(0);
+        const auto ms = juce::jlimit(1.0f, 5000.0f, inputAt(1, defaultAt(0, (n.node.op == "delay" || n.node.op == "cdelay") ? 250.0f : 30.0f)));
+        const auto delaySamples = juce::jlimit(1, static_cast<int>(n.delayBuffer.size()) - 1,
+                                               static_cast<int>(std::round(ms * 0.001f * static_cast<float>(sampleRate))));
+        const auto readIndex = (n.delayWriteIndex - delaySamples + static_cast<int>(n.delayBuffer.size())) % static_cast<int>(n.delayBuffer.size());
+        const auto delayed = n.delayBuffer[static_cast<size_t>(readIndex)];
+
+        float out = delayed;
+        if (n.node.op == "delay" || n.node.op == "cdelay")
+        {
+            n.delayBuffer[static_cast<size_t>(n.delayWriteIndex)] = in;
+        }
+        else if (n.node.op == "comb")
+        {
+            const auto fb = juce::jlimit(-0.995f, 0.995f, inputAt(2, defaultAt(1, 0.7f)));
+            n.delayBuffer[static_cast<size_t>(n.delayWriteIndex)] = in + delayed * fb;
+        }
+        else // apf
+        {
+            const auto g = juce::jlimit(-0.995f, 0.995f, inputAt(2, defaultAt(1, 0.5f)));
+            out = delayed - g * in;
+            n.delayBuffer[static_cast<size_t>(n.delayWriteIndex)] = in + g * out;
+        }
+
+        n.delayWriteIndex = (n.delayWriteIndex + 1) % static_cast<int>(n.delayBuffer.size());
         return out;
     }
     if (n.node.op == "clip")
@@ -399,7 +619,18 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
         n.stateA += (target - n.stateA) * alpha;
         return n.stateA;
     }
+    if (n.node.op == "sah")
+    {
+        const auto in = inputAt(0);
+        const auto trig = inputAt(1);
+        if (trig > 0.0f && n.stateB <= 0.0f)
+            n.stateA = in;
+        n.stateB = trig;
+        return n.stateA;
+    }
     if (n.node.op == "mtof")
+        return 440.0f * std::pow(2.0f, (inputAt(0, defaultAt(0, 69.0f)) - 69.0f) / 12.0f);
+    if (n.node.op == "mtof_sig")
         return 440.0f * std::pow(2.0f, (inputAt(0, defaultAt(0, 69.0f)) - 69.0f) / 12.0f);
     if (n.node.op == "delay1")
     {
@@ -410,12 +641,12 @@ float RuntimeEngine::runNode(RuntimeNode& n, const std::vector<float>& values, c
     if (n.node.op == "scope" || n.node.op == "spectrum")
         return inputAt(0);
     if (n.node.op == "out")
-        return inputAt(1);
+        return inputAt(0);
 
     return inputAt(0);
 }
 
-float RuntimeEngine::processSingleSample(CompiledGraph& graph, const int sampleIndex, std::vector<float>* valuesOut)
+float RuntimeEngine::processSingleSample(CompiledGraph& graph, const int sampleIndex, std::vector<float>* valuesOut, float* rightOut)
 {
     std::vector<float> scratch;
     auto* values = valuesOut;
@@ -430,10 +661,31 @@ float RuntimeEngine::processSingleSample(CompiledGraph& graph, const int sampleI
     for (const auto i : graph.executionOrder)
         (*values)[i] = runNode(graph.nodes[i], *values, sampleIndex, currentSampleRate, noise);
 
-    float outValue = 0.0f;
+    float outLeft = 0.0f;
+    float outRight = 0.0f;
     for (const auto idx : graph.outputNodes)
-        outValue += (*values)[idx];
-    return outValue;
+    {
+        const auto& outNode = graph.nodes[idx];
+        auto readInput = [&](const int port, const float fallback) -> float
+        {
+            if (port < 0 || static_cast<size_t>(port) >= outNode.inputIndices.size())
+                return fallback;
+            const auto inputIndex = outNode.inputIndices[static_cast<size_t>(port)];
+            if (inputIndex < 0 || static_cast<size_t>(inputIndex) >= values->size())
+                return fallback;
+            return (*values)[static_cast<size_t>(inputIndex)];
+        };
+
+        const auto l = readInput(0, 0.0f);
+        const auto hasRight = outNode.inputIndices.size() > 1 && outNode.inputIndices[1] >= 0;
+        const auto r = readInput(1, l);
+        outLeft += l;
+        outRight += hasRight ? r : l;
+    }
+
+    if (rightOut != nullptr)
+        *rightOut = outRight;
+    return outLeft;
 }
 
 void RuntimeEngine::processBlock(juce::AudioBuffer<float>& buffer)
@@ -451,10 +703,17 @@ void RuntimeEngine::processBlock(juce::AudioBuffer<float>& buffer, const int sta
     juce::ScopedTryLock lock(graphLock);
     if (!lock.isLocked() || currentGraph == nullptr)
     {
-        const auto hold = lastOutputSample.load();
+        const auto holdL = lastOutputSample.load();
+        const auto holdR = lastOutputRightSample.load();
         for (int s = 0; s < boundedNum; ++s)
-            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-                buffer.setSample(ch, boundedStart + s, hold);
+        {
+            if (buffer.getNumChannels() > 0)
+                buffer.setSample(0, boundedStart + s, holdL);
+            if (buffer.getNumChannels() > 1)
+                buffer.setSample(1, boundedStart + s, holdR);
+            for (int ch = 2; ch < buffer.getNumChannels(); ++ch)
+                buffer.setSample(ch, boundedStart + s, 0.5f * (holdL + holdR));
+        }
         absoluteSample += boundedNum;
         return;
     }
@@ -463,26 +722,34 @@ void RuntimeEngine::processBlock(juce::AudioBuffer<float>& buffer, const int sta
     for (int sample = 0; sample < boundedNum; ++sample)
     {
         const auto globalSample = static_cast<int>(absoluteSample + sample);
-        auto value = processSingleSample(*currentGraph, globalSample, &nodeValues);
+        float valueR = 0.0f;
+        auto valueL = processSingleSample(*currentGraph, globalSample, &nodeValues, &valueR);
 
         if (fadingOutGraph != nullptr && crossfadeRemainingSamples > 0)
         {
-            const auto oldValue = processSingleSample(*fadingOutGraph, globalSample);
+            float oldValueR = 0.0f;
+            const auto oldValueL = processSingleSample(*fadingOutGraph, globalSample, nullptr, &oldValueR);
             const auto t = 1.0f - static_cast<float>(crossfadeRemainingSamples) / static_cast<float>(juce::jmax(1, crossfadeTotalSamples));
-            value = oldValue * (1.0f - t) + value * t;
+            valueL = oldValueL * (1.0f - t) + valueL * t;
+            valueR = oldValueR * (1.0f - t) + valueR * t;
             --crossfadeRemainingSamples;
             if (crossfadeRemainingSamples <= 0)
                 fadingOutGraph.reset();
         }
 
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            buffer.setSample(ch, boundedStart + sample, value);
-        lastOutputSample.store(value);
+        if (buffer.getNumChannels() > 0)
+            buffer.setSample(0, boundedStart + sample, valueL);
+        if (buffer.getNumChannels() > 1)
+            buffer.setSample(1, boundedStart + sample, valueR);
+        for (int ch = 2; ch < buffer.getNumChannels(); ++ch)
+            buffer.setSample(ch, boundedStart + sample, 0.5f * (valueL + valueR));
+        lastOutputSample.store(valueL);
+        lastOutputRightSample.store(valueR);
 
         if (!scopeRing.empty())
         {
             const auto idx = scopeWriteIndex.fetch_add(1);
-            scopeRing[static_cast<size_t>(idx) % scopeRing.size()] = value;
+            scopeRing[static_cast<size_t>(idx) % scopeRing.size()] = 0.5f * (valueL + valueR);
         }
 
         for (const auto& [probeId, idx] : currentGraph->scopeProbeNodes)

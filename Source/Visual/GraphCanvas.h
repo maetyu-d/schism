@@ -13,7 +13,8 @@
 
 namespace duodsp::visual
 {
-class GraphCanvas final : public juce::Component
+class GraphCanvas final : public juce::Component,
+                          private juce::Timer
 {
 public:
     GraphCanvas();
@@ -24,6 +25,7 @@ public:
     std::string selectedNodeId() const;
     std::vector<std::string> getSelectedNodeIds() const;
     std::unordered_map<std::string, juce::Point<float>> getLayoutById() const;
+    void flashBang(const std::string& nodeId, double durationMs = 120.0);
     void clearSelection();
     void selectAllNodes();
     void deleteSelectedNodes();
@@ -39,6 +41,7 @@ public:
     std::function<void(const std::vector<ir::Edge>&)> onDeleteEdgesRequested;
     std::function<void(const std::string&, juce::Point<float>)> onNodeMoved;
     std::function<void(const std::string&, const std::string&)> onNodeTextEditRequested;
+    std::function<void(const std::string&)> onBangTriggered;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -51,11 +54,14 @@ public:
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
 private:
+    void timerCallback() override;
+
     enum class NodeStyle
     {
         object,
         message,
-        floatatom
+        floatatom,
+        bang
     };
 
     struct NodeVisual
@@ -114,8 +120,11 @@ private:
     bool pendingFloatatomEdit = false;
     std::string pendingFloatatomNodeId;
     juce::Point<float> pendingFloatatomMouseDown;
+    std::string pendingBangNodeId;
+    juce::Point<float> pendingBangMouseDown;
 
     juce::TextEditor inlineEditor;
     std::optional<std::string> editingNodeId;
+    std::unordered_map<std::string, double> bangFlashUntilMs;
 };
 } // namespace duodsp::visual

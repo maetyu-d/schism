@@ -21,6 +21,8 @@ public:
     void prepare(double sampleRate, int blockSize, int outputChannels);
     void setCrossfadeTimeMs(double ms);
     void setGraph(const ir::Graph& graph);
+    void triggerBang(const std::string& nodeId);
+    std::vector<std::string> consumeTriggeredBangIds();
     void processBlock(juce::AudioBuffer<float>& buffer);
     void processBlock(juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
     std::vector<float> getScopeSnapshot(size_t maxSamples) const;
@@ -38,6 +40,10 @@ private:
         std::vector<float> paramDefaults;
         float stateA = 0.0f;
         float stateB = 0.0f;
+        float stateC = 0.0f;
+        float stateD = 0.0f;
+        std::vector<float> delayBuffer;
+        int delayWriteIndex = 0;
     };
 
     struct CompiledGraph
@@ -52,7 +58,7 @@ private:
 
     std::unique_ptr<CompiledGraph> compileGraph(const ir::Graph& graph) const;
     static float runNode(RuntimeNode& n, const std::vector<float>& values, int sampleIndex, double sampleRate, juce::Random& random);
-    float processSingleSample(CompiledGraph& graph, int sampleIndex, std::vector<float>* valuesOut = nullptr);
+    float processSingleSample(CompiledGraph& graph, int sampleIndex, std::vector<float>* valuesOut = nullptr, float* rightOut = nullptr);
     static void transferState(const CompiledGraph* from, CompiledGraph& to);
 
     mutable juce::CriticalSection graphLock;
@@ -69,6 +75,7 @@ private:
     std::vector<float> scopeRing;
     std::atomic<int> scopeWriteIndex { 0 };
     std::atomic<float> lastOutputSample { 0.0f };
+    std::atomic<float> lastOutputRightSample { 0.0f };
     std::unordered_map<std::string, std::vector<float>> scopeProbeRings;
     std::unordered_map<std::string, std::vector<float>> spectrumProbeRings;
     std::unordered_map<std::string, int> scopeProbeWriteIndices;

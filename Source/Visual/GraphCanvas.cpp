@@ -41,14 +41,32 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "lop~ 1200";
     if (node.op == "hpf")
         return "hip~ 1200";
+    if (node.op == "lores")
+        return "lores~ 1200 0.5";
+    if (node.op == "bpf")
+        return "bpf~ 1200 0.7";
+    if (node.op == "svf")
+        return "svf~ 1200 0.7 0";
+    if (node.op == "delay")
+        return "delay~ 250";
+    if (node.op == "cdelay")
+        return "delay 250";
+    if (node.op == "apf")
+        return "apf~ 20 0.5";
+    if (node.op == "comb")
+        return "comb~ 30 0.7";
     if (node.op == "clip")
         return "clip~ -1 1";
     if (node.op == "tanh")
         return "tanh~ 1";
     if (node.op == "slew")
         return "slew~ 50";
+    if (node.op == "sah")
+        return "sah~";
     if (node.op == "mtof")
         return "mtof";
+    if (node.op == "mtof_sig")
+        return "mtof~";
     if (node.op == "out")
         return "dac~";
     if (node.op == "add")
@@ -67,6 +85,40 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "*";
     if (node.op == "cdiv")
         return "/";
+    if (node.op == "comp_sig")
+        return "comp~";
+    if (node.op == "comp")
+        return "comp";
+    if (node.op == "min_sig")
+        return "min~";
+    if (node.op == "max_sig")
+        return "max~";
+    if (node.op == "min")
+        return "min";
+    if (node.op == "max")
+        return "max";
+    if (node.op == "abs_sig")
+        return "abs~";
+    if (node.op == "abs")
+        return "abs";
+    if (node.op == "random")
+        return "random 0 1";
+    if (node.op == "and_sig")
+        return "and~";
+    if (node.op == "or_sig")
+        return "or~";
+    if (node.op == "xor_sig")
+        return "xor~";
+    if (node.op == "not_sig")
+        return "not~";
+    if (node.op == "and")
+        return "and";
+    if (node.op == "or")
+        return "or";
+    if (node.op == "xor")
+        return "xor";
+    if (node.op == "not")
+        return "not";
     if (node.op == "pow")
         return "pow~";
     if (node.op == "mod")
@@ -79,6 +131,8 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "spectrum~";
     if (node.op == "msg")
         return node.label.empty() ? "message" : juce::String(node.label);
+    if (node.op == "bang")
+        return "bang";
     if (node.op == "floatatom")
         return node.literal.has_value() ? juce::String(*node.literal, 3) : "0";
     if (node.op == "constant")
@@ -104,14 +158,32 @@ juce::String canonicalPdHeadForOp(const std::string& op)
         return "lop~";
     if (op == "hpf")
         return "hip~";
+    if (op == "lores")
+        return "lores~";
+    if (op == "bpf")
+        return "bpf~";
+    if (op == "svf")
+        return "svf~";
+    if (op == "delay")
+        return "delay~";
+    if (op == "cdelay")
+        return "delay";
+    if (op == "apf")
+        return "apf~";
+    if (op == "comb")
+        return "comb~";
     if (op == "clip")
         return "clip~";
     if (op == "tanh")
         return "tanh~";
     if (op == "slew")
         return "slew~";
+    if (op == "sah")
+        return "sah~";
     if (op == "mtof")
         return "mtof";
+    if (op == "mtof_sig")
+        return "mtof~";
     if (op == "out")
         return "dac~";
     if (op == "add")
@@ -134,6 +206,42 @@ juce::String canonicalPdHeadForOp(const std::string& op)
         return "*";
     if (op == "cdiv")
         return "/";
+    if (op == "bang")
+        return "bang";
+    if (op == "comp_sig")
+        return "comp~";
+    if (op == "comp")
+        return "comp";
+    if (op == "min_sig")
+        return "min~";
+    if (op == "max_sig")
+        return "max~";
+    if (op == "min")
+        return "min";
+    if (op == "max")
+        return "max";
+    if (op == "abs_sig")
+        return "abs~";
+    if (op == "abs")
+        return "abs";
+    if (op == "random")
+        return "random";
+    if (op == "and_sig")
+        return "and~";
+    if (op == "or_sig")
+        return "or~";
+    if (op == "xor_sig")
+        return "xor~";
+    if (op == "not_sig")
+        return "not~";
+    if (op == "and")
+        return "and";
+    if (op == "or")
+        return "or";
+    if (op == "xor")
+        return "xor";
+    if (op == "not")
+        return "not";
     return {};
 }
 } // namespace
@@ -183,7 +291,10 @@ void GraphCanvas::rebuildVisuals(const std::unordered_map<std::string, juce::Poi
         NodeVisual v;
         v.node = graph.nodes[i];
         v.displayText = pdObjectTextForNode(v.node);
-        v.style = v.node.op == "msg" ? NodeStyle::message : v.node.op == "floatatom" ? NodeStyle::floatatom : NodeStyle::object;
+        v.style = v.node.op == "bang" ? NodeStyle::bang
+                                       : v.node.op == "msg" ? NodeStyle::message
+                                       : v.node.op == "floatatom" ? NodeStyle::floatatom
+                                                                   : NodeStyle::object;
 
         const auto found = layoutById.find(v.node.id);
         juce::Point<float> pos;
@@ -193,8 +304,10 @@ void GraphCanvas::rebuildVisuals(const std::unordered_map<std::string, juce::Poi
             pos = { 30.0f + static_cast<float>((i % 4) * 170), 90.0f + static_cast<float>((i / 4) * 70) };
 
         const auto textWidth = static_cast<float>(measureFont.getStringWidth(v.displayText)) + 8.0f;
-        const auto w = juce::jmax(minNodeWidth, textWidth);
-        v.bounds = juce::Rectangle<float>(pos.x, pos.y, w, nodeHeight);
+        const auto bangSize = nodeHeight * 2.0f;
+        const auto w = v.style == NodeStyle::bang ? bangSize : juce::jmax(minNodeWidth, textWidth);
+        const auto h = v.style == NodeStyle::bang ? bangSize : nodeHeight;
+        v.bounds = juce::Rectangle<float>(pos.x, pos.y, w, h);
 
         const auto spec = ir::opSpecFor(v.node.op);
         for (int port = 0; port < static_cast<int>(spec.inputs.size()); ++port)
@@ -376,6 +489,7 @@ void GraphCanvas::cancelInlineEdit()
 void GraphCanvas::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xffe5e5e5));
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
 
     std::unordered_map<std::string, const NodeVisual*> byId;
     byId.reserve(visuals.size());
@@ -412,8 +526,23 @@ void GraphCanvas::paint(juce::Graphics& g)
         const auto rect = nodeScreenBounds(visual);
         const auto isSel = selectedNodeIds.contains(visual.node.id);
 
-        if (visual.style == NodeStyle::message)
+        if (visual.style == NodeStyle::bang)
         {
+            const auto isBangLit = bangFlashUntilMs.contains(visual.node.id) && bangFlashUntilMs[visual.node.id] > nowMs;
+            g.setColour(juce::Colours::white);
+            g.fillRect(rect);
+            g.setColour(juce::Colours::black);
+            g.drawRect(rect, 1.0f);
+            const auto circleRect = rect.reduced(rect.getWidth() * 0.22f, rect.getHeight() * 0.22f);
+            g.setColour(isBangLit ? juce::Colours::black : juce::Colours::white);
+            g.fillEllipse(circleRect);
+            g.setColour(juce::Colours::black);
+            g.drawEllipse(circleRect, 1.0f);
+        }
+        else if (visual.style == NodeStyle::message)
+        {
+            const auto isBang = visual.node.op == "bang";
+            const auto isBangLit = isBang && bangFlashUntilMs.contains(visual.node.id) && bangFlashUntilMs[visual.node.id] > nowMs;
             juce::Path msg;
             msg.startNewSubPath(rect.getX(), rect.getY());
             msg.lineTo(rect.getRight() - 7.0f, rect.getY());
@@ -421,7 +550,7 @@ void GraphCanvas::paint(juce::Graphics& g)
             msg.lineTo(rect.getRight(), rect.getBottom());
             msg.lineTo(rect.getX(), rect.getBottom());
             msg.closeSubPath();
-            g.setColour(juce::Colours::white);
+            g.setColour(isBangLit ? juce::Colour(0xffd9d9d9) : juce::Colours::white);
             g.fillPath(msg);
             g.setColour(juce::Colours::black);
             g.strokePath(msg, juce::PathStrokeType(1.0f));
@@ -449,12 +578,15 @@ void GraphCanvas::paint(juce::Graphics& g)
             g.drawRect(rect.expanded(1.0f), 2);
         }
 
-        g.setColour(juce::Colours::black);
-        const auto scaledFont = pdFont(juce::jlimit(10.0f, 24.0f, pdBaseFontSize * zoom));
-        g.setFont(scaledFont);
-        const auto textPadX = juce::jmax(2, static_cast<int>(std::round(3.0f * zoom)));
-        const auto textPadY = juce::jmax(0, static_cast<int>(std::round(1.0f * zoom)));
-        g.drawFittedText(visual.displayText, rect.getSmallestIntegerContainer().reduced(textPadX, textPadY), juce::Justification::centredLeft, 1);
+        if (visual.style != NodeStyle::bang)
+        {
+            g.setColour(juce::Colours::black);
+            const auto scaledFont = pdFont(juce::jlimit(10.0f, 24.0f, pdBaseFontSize * zoom));
+            g.setFont(scaledFont);
+            const auto textPadX = juce::jmax(2, static_cast<int>(std::round(3.0f * zoom)));
+            const auto textPadY = juce::jmax(0, static_cast<int>(std::round(1.0f * zoom)));
+            g.drawFittedText(visual.displayText, rect.getSmallestIntegerContainer().reduced(textPadX, textPadY), juce::Justification::centredLeft, 1);
+        }
 
         for (int port = 0; port < static_cast<int>(visual.inputRates.size()); ++port)
         {
@@ -475,13 +607,25 @@ void GraphCanvas::paint(juce::Graphics& g)
                 g.setColour(juce::Colours::black);
                 g.drawRect(inletRect, 1.0f);
             }
-            else
+            else if (rate == ir::PortRate::event)
             {
                 g.setColour(juce::Colour(0xffd0d0d0));
                 g.fillRect(inletRect);
                 g.setColour(juce::Colours::black);
                 g.drawRect(inletRect, 1.0f);
                 g.fillEllipse(inletRect.withSizeKeepingCentre(pr * 0.65f, pr * 0.65f));
+            }
+            else
+            {
+                // PortRate::any: Pd-like "either signal or value" inlet.
+                const auto leftHalf = inletRect.withWidth(inletRect.getWidth() * 0.5f);
+                const auto rightHalf = juce::Rectangle<float>(leftHalf.getRight(), inletRect.getY(), inletRect.getWidth() - leftHalf.getWidth(), inletRect.getHeight());
+                g.setColour(juce::Colours::black);
+                g.fillRect(leftHalf);
+                g.setColour(juce::Colours::white);
+                g.fillRect(rightHalf);
+                g.setColour(juce::Colours::black);
+                g.drawRect(inletRect, 1.0f);
             }
 
             // Pd-like hot inlet cue for trigger inlets (e.g. left inlet on control math boxes).
@@ -511,13 +655,24 @@ void GraphCanvas::paint(juce::Graphics& g)
             g.setColour(juce::Colours::black);
             g.drawRect(outletRect, 1.0f);
         }
-        else
+        else if (visual.outputRate == ir::PortRate::event)
         {
             g.setColour(juce::Colour(0xffd0d0d0));
             g.fillRect(outletRect);
             g.setColour(juce::Colours::black);
             g.drawRect(outletRect, 1.0f);
             g.fillEllipse(outletRect.withSizeKeepingCentre(pr * 0.65f, pr * 0.65f));
+        }
+        else
+        {
+            const auto leftHalf = outletRect.withWidth(outletRect.getWidth() * 0.5f);
+            const auto rightHalf = juce::Rectangle<float>(leftHalf.getRight(), outletRect.getY(), outletRect.getWidth() - leftHalf.getWidth(), outletRect.getHeight());
+            g.setColour(juce::Colours::black);
+            g.fillRect(leftHalf);
+            g.setColour(juce::Colours::white);
+            g.fillRect(rightHalf);
+            g.setColour(juce::Colours::black);
+            g.drawRect(outletRect, 1.0f);
         }
     }
 
@@ -664,32 +819,83 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
         return;
 
     juce::PopupMenu put;
-    put.addItem(1, "Put object (obj)");
-    put.addItem(2, "Put message (msg)");
-    put.addItem(3, "Put number (floatatom)");
-    put.addSeparator();
-    put.addItem(10, "osc~");
-    put.addItem(11, "phasor~");
-    put.addItem(12, "tri~");
-    put.addItem(13, "noise~");
-    put.addItem(14, "lop~");
-    put.addItem(15, "hip~");
-    put.addItem(16, "clip~");
-    put.addItem(17, "tanh~");
-    put.addItem(18, "slew~");
-    put.addItem(19, "mtof");
-    put.addItem(20, "pow~");
-    put.addItem(21, "mod~");
-    put.addItem(22, "dac~");
-    put.addSeparator();
-    put.addItem(30, "+~");
-    put.addItem(31, "-~");
-    put.addItem(32, "*~");
-    put.addItem(33, "/~");
-    put.addItem(34, "+");
-    put.addItem(35, "-");
-    put.addItem(36, "*");
-    put.addItem(37, "/");
+    juce::PopupMenu create;
+    create.addItem(1, "object (obj)");
+    create.addItem(2, "message (msg)");
+    create.addItem(3, "number (floatatom)");
+    create.addItem(4, "bang");
+
+    juce::PopupMenu generators;
+    generators.addItem(10, "osc~");
+    generators.addItem(11, "phasor~");
+    generators.addItem(12, "tri~");
+    generators.addItem(13, "noise~");
+
+    juce::PopupMenu filtersShapers;
+    filtersShapers.addItem(14, "lop~");
+    filtersShapers.addItem(15, "hip~");
+    filtersShapers.addItem(16, "bpf~");
+    filtersShapers.addItem(17, "svf~");
+    filtersShapers.addItem(40, "lores~");
+    filtersShapers.addSeparator();
+    filtersShapers.addItem(21, "clip~");
+    filtersShapers.addItem(22, "tanh~");
+    filtersShapers.addItem(23, "slew~");
+
+    juce::PopupMenu delayTime;
+    delayTime.addItem(18, "delay~");
+    delayTime.addItem(41, "delay");
+    delayTime.addItem(19, "apf~");
+    delayTime.addItem(20, "comb~");
+    delayTime.addItem(24, "sah~");
+
+    juce::PopupMenu math;
+    math.addItem(30, "+~");
+    math.addItem(31, "-~");
+    math.addItem(32, "*~");
+    math.addItem(33, "/~");
+    math.addItem(27, "pow~");
+    math.addItem(28, "mod~");
+    math.addSeparator();
+    math.addItem(34, "+");
+    math.addItem(35, "-");
+    math.addItem(36, "*");
+    math.addItem(37, "/");
+    math.addSeparator();
+    math.addItem(50, "min~");
+    math.addItem(51, "max~");
+    math.addItem(52, "min");
+    math.addItem(53, "max");
+    math.addItem(54, "abs~");
+    math.addItem(55, "abs");
+
+    juce::PopupMenu logic;
+    logic.addItem(38, "comp~");
+    logic.addItem(42, "and~");
+    logic.addItem(43, "or~");
+    logic.addItem(44, "xor~");
+    logic.addItem(45, "not~");
+    logic.addSeparator();
+    logic.addItem(39, "comp");
+    logic.addItem(46, "and");
+    logic.addItem(47, "or");
+    logic.addItem(48, "xor");
+    logic.addItem(49, "not");
+    logic.addSeparator();
+    logic.addItem(56, "random");
+
+    juce::PopupMenu routingConv;
+    routingConv.addItem(25, "mtof");
+    routingConv.addItem(26, "mtof~");
+    routingConv.addItem(29, "dac~");
+
+    put.addSubMenu("Create", create);
+    put.addSubMenu("Generators", generators);
+    put.addSubMenu("Filters/Shapers", filtersShapers);
+    put.addSubMenu("Delay/Time", delayTime);
+    put.addSubMenu("Math", math);
+    put.addSubMenu("Logic", logic);
+    put.addSubMenu("Routing/Convert", routingConv);
 
     const auto p = screenToWorld(screenPos);
     juce::Component::SafePointer<GraphCanvas> safeThis(this);
@@ -705,6 +911,8 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                               safeThis->onAddNodeRequested("msg", p);
                           else if (res == 3)
                               safeThis->onAddNodeRequested("floatatom", p);
+                          else if (res == 4)
+                              safeThis->onAddNodeRequested("bang", p);
                           else if (res == 10)
                               safeThis->onAddNodeRequested("sin", p);
                           else if (res == 11)
@@ -718,18 +926,32 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                           else if (res == 15)
                               safeThis->onAddNodeRequested("hpf", p);
                           else if (res == 16)
-                              safeThis->onAddNodeRequested("clip", p);
+                              safeThis->onAddNodeRequested("bpf", p);
                           else if (res == 17)
-                              safeThis->onAddNodeRequested("tanh", p);
+                              safeThis->onAddNodeRequested("svf", p);
                           else if (res == 18)
-                              safeThis->onAddNodeRequested("slew", p);
+                              safeThis->onAddNodeRequested("delay", p);
                           else if (res == 19)
-                              safeThis->onAddNodeRequested("mtof", p);
+                              safeThis->onAddNodeRequested("apf", p);
                           else if (res == 20)
-                              safeThis->onAddNodeRequested("pow", p);
+                              safeThis->onAddNodeRequested("comb", p);
                           else if (res == 21)
-                              safeThis->onAddNodeRequested("mod", p);
+                              safeThis->onAddNodeRequested("clip", p);
                           else if (res == 22)
+                              safeThis->onAddNodeRequested("tanh", p);
+                          else if (res == 23)
+                              safeThis->onAddNodeRequested("slew", p);
+                          else if (res == 24)
+                              safeThis->onAddNodeRequested("sah", p);
+                          else if (res == 25)
+                              safeThis->onAddNodeRequested("mtof", p);
+                          else if (res == 26)
+                              safeThis->onAddNodeRequested("mtof_sig", p);
+                          else if (res == 27)
+                              safeThis->onAddNodeRequested("pow", p);
+                          else if (res == 28)
+                              safeThis->onAddNodeRequested("mod", p);
+                          else if (res == 29)
                               safeThis->onAddNodeRequested("out", p);
                           else if (res == 30)
                               safeThis->onAddNodeRequested("add", p);
@@ -747,6 +969,44 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                               safeThis->onAddNodeRequested("cmul", p);
                           else if (res == 37)
                               safeThis->onAddNodeRequested("cdiv", p);
+                          else if (res == 38)
+                              safeThis->onAddNodeRequested("comp_sig", p);
+                          else if (res == 39)
+                              safeThis->onAddNodeRequested("comp", p);
+                          else if (res == 40)
+                              safeThis->onAddNodeRequested("lores", p);
+                          else if (res == 41)
+                              safeThis->onAddNodeRequested("cdelay", p);
+                          else if (res == 42)
+                              safeThis->onAddNodeRequested("and_sig", p);
+                          else if (res == 43)
+                              safeThis->onAddNodeRequested("or_sig", p);
+                          else if (res == 44)
+                              safeThis->onAddNodeRequested("xor_sig", p);
+                          else if (res == 45)
+                              safeThis->onAddNodeRequested("not_sig", p);
+                          else if (res == 46)
+                              safeThis->onAddNodeRequested("and", p);
+                          else if (res == 47)
+                              safeThis->onAddNodeRequested("or", p);
+                          else if (res == 48)
+                              safeThis->onAddNodeRequested("xor", p);
+                          else if (res == 49)
+                              safeThis->onAddNodeRequested("not", p);
+                          else if (res == 50)
+                              safeThis->onAddNodeRequested("min_sig", p);
+                          else if (res == 51)
+                              safeThis->onAddNodeRequested("max_sig", p);
+                          else if (res == 52)
+                              safeThis->onAddNodeRequested("min", p);
+                          else if (res == 53)
+                              safeThis->onAddNodeRequested("max", p);
+                          else if (res == 54)
+                              safeThis->onAddNodeRequested("abs_sig", p);
+                          else if (res == 55)
+                              safeThis->onAddNodeRequested("abs", p);
+                          else if (res == 56)
+                              safeThis->onAddNodeRequested("random", p);
                       });
 }
 
@@ -849,6 +1109,15 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
         pendingFloatatomEdit = (visual.style == NodeStyle::floatatom && !inPortHit && !strictOutHitForFloat);
         pendingFloatatomNodeId = visual.node.id;
         pendingFloatatomMouseDown = event.position;
+        if (visual.node.op == "bang" && !inPortHit && !outPortHit)
+        {
+            pendingBangNodeId = visual.node.id;
+            pendingBangMouseDown = event.position;
+        }
+        else
+        {
+            pendingBangNodeId.clear();
+        }
         repaint();
         return;
     }
@@ -856,6 +1125,7 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
     pendingDragNode.reset();
     pendingFloatatomEdit = false;
     pendingFloatatomNodeId.clear();
+    pendingBangNodeId.clear();
     pendingMarqueeStart = true;
     pendingMarqueeClearsSelection = !event.mods.isShiftDown();
     marqueeSelecting = false;
@@ -883,6 +1153,7 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
             pendingDragNode.reset();
             if (pendingFloatatomEdit)
                 pendingFloatatomEdit = false;
+            pendingBangNodeId.clear();
         }
     }
 
@@ -976,8 +1247,15 @@ void GraphCanvas::mouseUp(const juce::MouseEvent& event)
     connectFromNode.reset();
     if (pendingFloatatomEdit && !pendingFloatatomNodeId.empty() && event.position.getDistanceFrom(pendingFloatatomMouseDown) <= 2.0f)
         beginInlineEdit(pendingFloatatomNodeId);
+    if (!pendingBangNodeId.empty() && event.position.getDistanceFrom(pendingBangMouseDown) <= 2.0f && onBangTriggered != nullptr)
+    {
+        bangFlashUntilMs[pendingBangNodeId] = juce::Time::getMillisecondCounterHiRes() + 120.0;
+        startTimerHz(60);
+        onBangTriggered(pendingBangNodeId);
+    }
     pendingFloatatomEdit = false;
     pendingFloatatomNodeId.clear();
+    pendingBangNodeId.clear();
     if (pendingMarqueeStart && !marqueeSelecting && pendingMarqueeClearsSelection)
     {
         selectedNodeIds.clear();
@@ -1004,6 +1282,15 @@ void GraphCanvas::mouseDoubleClick(const juce::MouseEvent& event)
         beginInlineEdit(n.id);
 }
 
+void GraphCanvas::flashBang(const std::string& nodeId, const double durationMs)
+{
+    if (nodeId.empty())
+        return;
+    bangFlashUntilMs[nodeId] = juce::Time::getMillisecondCounterHiRes() + juce::jmax(1.0, durationMs);
+    startTimerHz(60);
+    repaint();
+}
+
 void GraphCanvas::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
     const auto oldZoom = zoom;
@@ -1020,5 +1307,25 @@ void GraphCanvas::mouseWheelMove(const juce::MouseEvent& event, const juce::Mous
     panOffset.x = event.position.x - c.getX() - worldAtCursor.x * zoom;
     panOffset.y = event.position.y - c.getY() - worldAtCursor.y * zoom;
     repaint();
+}
+
+void GraphCanvas::timerCallback()
+{
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+    bool hasActive = false;
+    for (auto it = bangFlashUntilMs.begin(); it != bangFlashUntilMs.end();)
+    {
+        if (it->second <= nowMs)
+            it = bangFlashUntilMs.erase(it);
+        else
+        {
+            hasActive = true;
+            ++it;
+        }
+    }
+
+    repaint();
+    if (!hasActive)
+        stopTimer();
 }
 } // namespace duodsp::visual

@@ -89,14 +89,32 @@ MainComponent::MainComponent()
                     return "lop~ 1200";
                 if (o == "hpf")
                     return "hip~ 1200";
+                if (o == "lores")
+                    return "lores~ 1200 0.5";
+                if (o == "bpf")
+                    return "bpf~ 1200 0.7";
+                if (o == "svf")
+                    return "svf~ 1200 0.7 0";
+                if (o == "delay")
+                    return "delay~ 250";
+                if (o == "cdelay")
+                    return "delay 250";
+                if (o == "apf")
+                    return "apf~ 20 0.5";
+                if (o == "comb")
+                    return "comb~ 30 0.7";
                 if (o == "clip")
                     return "clip~ -1 1";
                 if (o == "tanh")
                     return "tanh~ 1";
                 if (o == "slew")
                     return "slew~ 50";
+                if (o == "sah")
+                    return "sah~";
                 if (o == "mtof")
                     return "mtof 69";
+                if (o == "mtof_sig")
+                    return "mtof~ 69";
                 if (o == "out")
                     return "dac~";
                 if (o == "add")
@@ -119,6 +137,42 @@ MainComponent::MainComponent()
                     return "*";
                 if (o == "cdiv")
                     return "/";
+                if (o == "comp_sig")
+                    return "comp~";
+                if (o == "comp")
+                    return "comp";
+                if (o == "min_sig")
+                    return "min~";
+                if (o == "max_sig")
+                    return "max~";
+                if (o == "min")
+                    return "min";
+                if (o == "max")
+                    return "max";
+                if (o == "abs_sig")
+                    return "abs~";
+                if (o == "abs")
+                    return "abs";
+                if (o == "random")
+                    return "random 0 1";
+                if (o == "bang")
+                    return "bang";
+                if (o == "and_sig")
+                    return "and~";
+                if (o == "or_sig")
+                    return "or~";
+                if (o == "xor_sig")
+                    return "xor~";
+                if (o == "not_sig")
+                    return "not~";
+                if (o == "and")
+                    return "and";
+                if (o == "or")
+                    return "or";
+                if (o == "xor")
+                    return "xor";
+                if (o == "not")
+                    return "not";
                 return o;
             };
             graph.nodes.push_back({ id, op, defaultPdLabel(op), std::nullopt });
@@ -184,14 +238,32 @@ MainComponent::MainComponent()
                             return "lpf";
                         if (h == "hip~")
                             return "hpf";
+                        if (h == "lores~")
+                            return "lores";
+                        if (h == "bpf~")
+                            return "bpf";
+                        if (h == "svf~")
+                            return "svf";
+                        if (h == "delay~")
+                            return "delay";
+                        if (h == "delay")
+                            return "cdelay";
+                        if (h == "apf~")
+                            return "apf";
+                        if (h == "comb~")
+                            return "comb";
                         if (h == "clip~")
                             return "clip";
                         if (h == "tanh~")
                             return "tanh";
                         if (h == "slew~")
                             return "slew";
+                        if (h == "sah~")
+                            return "sah";
                         if (h == "mtof")
                             return "mtof";
+                        if (h == "mtof~")
+                            return "mtof_sig";
                         if (h == "dac~")
                             return "out";
                         if (h == "+~")
@@ -210,6 +282,42 @@ MainComponent::MainComponent()
                             return "cmul";
                         if (h == "/")
                             return "cdiv";
+                        if (h == "comp~")
+                            return "comp_sig";
+                        if (h == "comp")
+                            return "comp";
+                        if (h == "min~")
+                            return "min_sig";
+                        if (h == "max~")
+                            return "max_sig";
+                        if (h == "min")
+                            return "min";
+                        if (h == "max")
+                            return "max";
+                        if (h == "abs~")
+                            return "abs_sig";
+                        if (h == "abs")
+                            return "abs";
+                        if (h == "random")
+                            return "random";
+                        if (h == "bang")
+                            return "bang";
+                        if (h == "and~")
+                            return "and_sig";
+                        if (h == "or~")
+                            return "or_sig";
+                        if (h == "xor~")
+                            return "xor_sig";
+                        if (h == "not~")
+                            return "not_sig";
+                        if (h == "and")
+                            return "and";
+                        if (h == "or")
+                            return "or";
+                        if (h == "xor")
+                            return "xor";
+                        if (h == "not")
+                            return "not";
                         return {};
                     };
 
@@ -274,6 +382,10 @@ MainComponent::MainComponent()
     graphCanvas.onNodeMoved = [this](const std::string& nodeId, const juce::Point<float> p)
     {
         nodeLayout[nodeId] = p;
+    };
+    graphCanvas.onBangTriggered = [this](const std::string& nodeId)
+    {
+        runtime.triggerBang(nodeId);
     };
 
     codeDocument.addListener(this);
@@ -445,6 +557,10 @@ void MainComponent::timerCallback()
         compileFromText();
         compilePending = false;
     }
+
+    const auto triggeredBangs = runtime.consumeTriggeredBangIds();
+    for (const auto& id : triggeredBangs)
+        graphCanvas.flashBang(id);
 
     const auto caret = codeEditor.getCaretPos().getPosition();
     if (caret != lastCaret)
@@ -1100,8 +1216,8 @@ void MainComponent::compileFromText()
         std::string line;
         while (std::getline(iss, line))
         {
-            if (line.find("// dac signal <- ") != std::string::npos)
-                lines.push_back(line.substr(line.find("// dac signal <- ")));
+            if (const auto pos = line.find("// dac "); pos != std::string::npos)
+                lines.push_back(line.substr(pos));
         }
         return lines;
     };

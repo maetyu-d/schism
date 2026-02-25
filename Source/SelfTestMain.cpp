@@ -8,6 +8,7 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -30,9 +31,8 @@ duodsp::ir::Graph makeConstantOutGraph(const std::string& constId, const double 
 {
     duodsp::ir::Graph g;
     g.nodes.push_back({ constId, "constant", std::to_string(value), value });
-    g.nodes.push_back({ "bus_0", "constant", "0", 0.0 });
     g.nodes.push_back({ "out_1", "out", "out", std::nullopt });
-    g.edges.push_back({ "bus_0", "out_1", 0 });
+    g.edges.push_back({ constId, "out_1", 0 });
     g.edges.push_back({ constId, "out_1", 1 });
     g.bindings["sig"] = constId;
     return g;
@@ -51,10 +51,9 @@ duodsp::ir::Graph makeUnaryOpGraph(const std::string& op, const std::string& lab
     duodsp::ir::Graph g;
     g.nodes.push_back({ "src", "constant", std::to_string(input), input });
     g.nodes.push_back({ "op", op, label, std::nullopt });
-    g.nodes.push_back({ "bus", "constant", "0", 0.0 });
     g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
     g.edges.push_back({ "src", "op", 0 });
-    g.edges.push_back({ "bus", "out", 0 });
+    g.edges.push_back({ "op", "out", 0 });
     g.edges.push_back({ "op", "out", 1 });
     g.bindings["sig"] = "op";
     return g;
@@ -64,9 +63,23 @@ duodsp::ir::Graph makeSourceFreeOpGraph(const std::string& op, const std::string
 {
     duodsp::ir::Graph g;
     g.nodes.push_back({ "op", op, label, std::nullopt });
-    g.nodes.push_back({ "bus", "constant", "0", 0.0 });
     g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
-    g.edges.push_back({ "bus", "out", 0 });
+    g.edges.push_back({ "op", "out", 0 });
+    g.edges.push_back({ "op", "out", 1 });
+    g.bindings["sig"] = "op";
+    return g;
+}
+
+duodsp::ir::Graph makeBinaryOpGraph(const std::string& op, const std::string& label, const double a, const double b)
+{
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "a", "constant", std::to_string(a), a });
+    g.nodes.push_back({ "b", "constant", std::to_string(b), b });
+    g.nodes.push_back({ "op", op, label, std::nullopt });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "a", "op", 0 });
+    g.edges.push_back({ "b", "op", 1 });
+    g.edges.push_back({ "op", "out", 0 });
     g.edges.push_back({ "op", "out", 1 });
     g.bindings["sig"] = "op";
     return g;
@@ -78,7 +91,7 @@ void testCompileAndSync()
         "osc = sin(220);\n"
         "amp = 0.2;\n"
         "sig = osc * amp;\n"
-        "out(0, sig);\n";
+        "dac~(sig, sig);\n";
 
     const auto result = duodsp::text::compile(source, nullptr);
     require(result.diagnostics.empty(), "Expected no diagnostics for valid graph source.");
@@ -94,7 +107,7 @@ void testStableNodeIds()
         "osc = sin(220);\n"
         "amp = 0.2;\n"
         "sig = osc * amp;\n"
-        "out(0, sig);\n";
+        "dac~(sig, sig);\n";
     const auto a = duodsp::text::compile(sourceA, nullptr);
     require(a.graph.bindings.contains("sig"), "Binding sig missing in compile A.");
     const auto sigIdA = a.graph.bindings.at("sig");
@@ -103,7 +116,7 @@ void testStableNodeIds()
         "osc = sin(440);\n"
         "amp = 0.2;\n"
         "sig = osc * amp;\n"
-        "out(0, sig);\n";
+        "dac~(sig, sig);\n";
     const auto b = duodsp::text::compile(sourceB, &a.graph);
     require(b.graph.bindings.contains("sig"), "Binding sig missing in compile B.");
     const auto sigIdB = b.graph.bindings.at("sig");
@@ -162,13 +175,25 @@ void testTypedPortValidation()
 {
     duodsp::ir::Graph g;
     g.nodes.push_back({ "osc", "sin", "sin", std::nullopt });
+    g.nodes.push_back({ "aud", "noise", "noise~", std::nullopt });
+    g.nodes.push_back({ "k", "floatatom", "2", 2.0 });
+    g.nodes.push_back({ "m", "mtof", "mtof", std::nullopt });
+    g.nodes.push_back({ "mul", "mul", "*~", std::nullopt });
     g.nodes.push_back({ "out", "out", "out", std::nullopt });
-    g.nodes.push_back({ "bus", "constant", "0", 0.0 });
-    g.edges.push_back({ "bus", "out", 0 });
+    g.edges.push_back({ "osc", "out", 0 });
     g.edges.push_back({ "osc", "out", 1 });
 
-    const auto issue = duodsp::ir::validateConnection(g, "osc", "out", 0);
+    const auto issue = duodsp::ir::validateConnection(g, "osc", "m", 0);
     require(issue.has_value(), "Audio->control connection should be rejected.");
+
+    const auto rhsControl = duodsp::ir::validateConnection(g, "k", "mul", 1);
+    require(!rhsControl.has_value(), "Control->right inlet of *~ should be accepted.");
+
+    const auto lhsControl = duodsp::ir::validateConnection(g, "k", "mul", 0);
+    require(!lhsControl.has_value(), "Control->left inlet of *~ should still be accepted.");
+
+    const auto oscFreqAudio = duodsp::ir::validateConnection(g, "aud", "osc", 0);
+    require(!oscFreqAudio.has_value(), "Audio->oscillator frequency inlet should be accepted.");
 }
 
 void testProbeTargeting()
@@ -177,11 +202,10 @@ void testProbeTargeting()
     g.nodes.push_back({ "src", "constant", "1.0", 1.0 });
     g.nodes.push_back({ "scopeTap", "scope", "scope", std::nullopt });
     g.nodes.push_back({ "specTap", "spectrum", "spectrum", std::nullopt });
-    g.nodes.push_back({ "bus", "constant", "0", 0.0 });
     g.nodes.push_back({ "out", "out", "out", std::nullopt });
     g.edges.push_back({ "src", "scopeTap", 0 });
     g.edges.push_back({ "src", "specTap", 0 });
-    g.edges.push_back({ "bus", "out", 0 });
+    g.edges.push_back({ "src", "out", 0 });
     g.edges.push_back({ "src", "out", 1 });
 
     duodsp::dsp::RuntimeEngine engine;
@@ -209,7 +233,7 @@ void testControlMathCodeRoundTrip()
         "b = 5;\n"
         "k = @k (a + b * 2);\n"
         "sig = sin(k);\n"
-        "out(0, sig);\n";
+        "dac~(sig, sig);\n";
 
     const auto r = duodsp::text::compile(source, nullptr);
     require(r.diagnostics.empty(), "Control-math source should compile without diagnostics.");
@@ -242,6 +266,8 @@ void testLabelDefaultsForNodes()
     };
 
     require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("mul", "*~ 0.1", 1.0), 64), 0.1f, 0.02f), "*~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("comp_sig", "comp~ 0.5", 1.0), 64), 1.0f, 0.02f), "comp~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("comp", "comp 0.5", 1.0), 64), 1.0f, 0.02f), "comp arg default not applied.");
     require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("add", "+~ 0.25", 1.0), 64), 1.25f, 0.02f), "+~ arg default not applied.");
     require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("sub", "-~ 0.25", 1.0), 64), 0.75f, 0.02f), "-~ arg default not applied.");
     require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("div", "/~ 4", 1.0), 64), 0.25f, 0.02f), "/~ arg default not applied.");
@@ -254,9 +280,268 @@ void testLabelDefaultsForNodes()
 
     const auto mtofOut = runGraphAndReadSample(engine, makeSourceFreeOpGraph("mtof", "mtof 69"), 64);
     require(near(mtofOut, 440.0f, 0.5f), "mtof arg default not applied.");
+    const auto mtofSigOut = runGraphAndReadSample(engine, makeSourceFreeOpGraph("mtof_sig", "mtof~ 69"), 64);
+    require(near(mtofSigOut, 440.0f, 0.5f), "mtof~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("delay", "delay~ 1", 1.0), 128), 1.0f, 0.05f), "delay~ arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("cdelay", "delay 1", 1.0), 128), 1.0f, 0.05f), "delay (control) arg default not applied.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("not_sig", "not~", 1.0), 64), 0.0f, 0.02f), "not~ default behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("not", "not", 1.0), 64), 0.0f, 0.02f), "not default behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("min_sig", "min~ 0.5", 1.0), 64), 0.5f, 0.02f), "min~ arg default behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("max_sig", "max~ 0.5", 0.1), 64), 0.5f, 0.02f), "max~ arg default behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("min", "min 0.5", 1.0), 64), 0.5f, 0.02f), "min arg default behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("max", "max 0.5", 0.1), 64), 0.5f, 0.02f), "max arg default behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("abs_sig", "abs~", -0.5), 64), 0.5f, 0.02f), "abs~ behavior incorrect.");
+    require(near(runGraphAndReadSample(engine, makeUnaryOpGraph("abs", "abs", -0.5), 64), 0.5f, 0.02f), "abs behavior incorrect.");
+
+    duodsp::ir::Graph randomG;
+    randomG.nodes.push_back({ "trig", "constant", "1", 1.0 });
+    randomG.nodes.push_back({ "r", "random", "random 2 4", std::nullopt });
+    randomG.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    randomG.edges.push_back({ "trig", "r", 0 });
+    randomG.edges.push_back({ "r", "out", 0 });
+    randomG.edges.push_back({ "r", "out", 1 });
+    const auto randomOut = runGraphAndReadSample(engine, randomG, 64);
+    require(randomOut >= 2.0f && randomOut <= 4.0f, "random bounds/defaults not applied.");
+
+    const auto bpfOut = runGraphAndReadSample(engine, makeUnaryOpGraph("bpf", "bpf~ 1000 0.7", 1.0), 128);
+    require(std::isfinite(bpfOut), "bpf~ output must be finite.");
+    const auto loresOut = runGraphAndReadSample(engine, makeUnaryOpGraph("lores", "lores~ 1000 0.5", 1.0), 128);
+    require(std::isfinite(loresOut), "lores~ output must be finite.");
+    const auto svfOut = runGraphAndReadSample(engine, makeUnaryOpGraph("svf", "svf~ 1000 0.7 1", 1.0), 128);
+    require(std::isfinite(svfOut), "svf~ output must be finite.");
+    const auto apfOut = runGraphAndReadSample(engine, makeUnaryOpGraph("apf", "apf~ 2 0.5", 1.0), 128);
+    require(std::isfinite(apfOut), "apf~ output must be finite.");
+    const auto combOut = runGraphAndReadSample(engine, makeUnaryOpGraph("comb", "comb~ 2 0.7", 1.0), 128);
+    require(std::isfinite(combOut), "comb~ output must be finite.");
 
     const auto phasorOut = runGraphAndReadSample(engine, makeSourceFreeOpGraph("saw", "phasor~ 400"), 101);
     require(phasorOut > 0.4f, "phasor~ arg default likely not applied.");
+
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("comp_sig", "comp~", 0.8, 0.2), 64), 1.0f, 0.02f), "comp~ compare true should output 1.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("comp_sig", "comp~", 0.1, 0.2), 64), 0.0f, 0.02f), "comp~ compare false should output 0.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("comp", "comp", 0.8, 0.2), 64), 1.0f, 0.02f), "comp compare true should output 1.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("comp", "comp", 0.1, 0.2), 64), 0.0f, 0.02f), "comp compare false should output 0.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("and_sig", "and~", 1.0, 1.0), 64), 1.0f, 0.02f), "and~ true/true should output 1.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("or_sig", "or~", 0.0, 1.0), 64), 1.0f, 0.02f), "or~ false/true should output 1.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("xor_sig", "xor~", 1.0, 1.0), 64), 0.0f, 0.02f), "xor~ true/true should output 0.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("and", "and", 1.0, 0.0), 64), 0.0f, 0.02f), "and true/false should output 0.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("or", "or", 0.0, 1.0), 64), 1.0f, 0.02f), "or false/true should output 1.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("xor", "xor", 1.0, 0.0), 64), 1.0f, 0.02f), "xor true/false should output 1.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("min_sig", "min~", 0.2, 0.8), 64), 0.2f, 0.02f), "min~ should output lower value.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("max_sig", "max~", 0.2, 0.8), 64), 0.8f, 0.02f), "max~ should output higher value.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("min", "min", 0.2, 0.8), 64), 0.2f, 0.02f), "min should output lower value.");
+    require(near(runGraphAndReadSample(engine, makeBinaryOpGraph("max", "max", 0.2, 0.8), 64), 0.8f, 0.02f), "max should output higher value.");
+}
+
+void testSampleAndHoldNode()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph noTrigger;
+    noTrigger.nodes.push_back({ "src", "constant", "0.8", 0.8 });
+    noTrigger.nodes.push_back({ "trig", "constant", "0", 0.0 });
+    noTrigger.nodes.push_back({ "sah", "sah", "sah~", std::nullopt });
+    noTrigger.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    noTrigger.edges.push_back({ "src", "sah", 0 });
+    noTrigger.edges.push_back({ "trig", "sah", 1 });
+    noTrigger.edges.push_back({ "sah", "out", 0 });
+    noTrigger.edges.push_back({ "sah", "out", 1 });
+    const auto held0 = runGraphAndReadSample(engine, noTrigger, 64);
+    require(std::abs(held0) < 0.01f, "sah~ should hold initial value when trigger never rises.");
+
+    duodsp::ir::Graph triggerRise = noTrigger;
+    if (auto* trig = triggerRise.findNode("trig"); trig != nullptr)
+        trig->literal = 1.0;
+    const auto held1 = runGraphAndReadSample(engine, triggerRise, 64);
+    if (!(std::abs(held1 - 0.8f) < 0.01f))
+    {
+        std::ostringstream msg;
+        msg << "sah~ should sample input on trigger rising edge (got " << held1 << ")";
+        require(false, msg.str());
+    }
+}
+
+void testBangNode()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "b", "out", 0 });
+    g.edges.push_back({ "b", "out", 1 });
+    engine.setGraph(g);
+
+    juce::AudioBuffer<float> buffer(2, 64);
+    engine.processBlock(buffer);
+    require(std::abs(buffer.getSample(0, 0)) < 0.001f, "bang should be idle before trigger.");
+
+    engine.triggerBang("b");
+    engine.processBlock(buffer);
+    require(buffer.getSample(0, 0) > 0.5f, "bang should output pulse on trigger.");
+    require(std::abs(buffer.getSample(0, 1)) < 0.001f, "bang pulse should be one sample.");
+
+    duodsp::dsp::RuntimeEngine engineIn;
+    engineIn.prepare(48000.0, 64, 2);
+    engineIn.setCrossfadeTimeMs(0.0);
+    duodsp::ir::Graph gIn;
+    gIn.nodes.push_back({ "trig", "constant", "1", 1.0 });
+    gIn.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    gIn.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    gIn.edges.push_back({ "trig", "b", 0 });
+    gIn.edges.push_back({ "b", "out", 0 });
+    gIn.edges.push_back({ "b", "out", 1 });
+    engineIn.setGraph(gIn);
+    engineIn.processBlock(buffer);
+    float peak = 0.0f;
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+        peak = juce::jmax(peak, buffer.getSample(0, i));
+    if (!(peak > 0.5f))
+    {
+        std::ostringstream msg;
+        msg << "bang should trigger from input rising edge (peak=" << peak << ")";
+        require(false, msg.str());
+    }
+
+    // Bang should also be delayed by control-rate delay object.
+    duodsp::dsp::RuntimeEngine delayEngine;
+    delayEngine.prepare(48000.0, 512, 2);
+    delayEngine.setCrossfadeTimeMs(0.0);
+    duodsp::ir::Graph delayed;
+    delayed.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    delayed.nodes.push_back({ "d", "cdelay", "delay 10", std::nullopt });
+    delayed.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    delayed.edges.push_back({ "b", "d", 0 });
+    delayed.edges.push_back({ "d", "out", 0 });
+    delayed.edges.push_back({ "d", "out", 1 });
+    delayEngine.setGraph(delayed);
+    delayEngine.triggerBang("b");
+    juce::AudioBuffer<float> longBuf(2, 512);
+    delayEngine.processBlock(longBuf);
+    int firstPulse = -1;
+    for (int i = 0; i < longBuf.getNumSamples(); ++i)
+    {
+        if (longBuf.getSample(0, i) > 0.5f)
+        {
+            firstPulse = i;
+            break;
+        }
+    }
+    require(firstPulse >= 430 && firstPulse <= 510, "delay should postpone bang pulse by roughly 10ms at 48k.");
+}
+
+void testNewFilterDelayCodeRoundTrip()
+{
+    const std::string source =
+        "n = noise~(0.1);\n"
+        "d = delay~(n, 2);\n"
+        "k = delay(1, 2);\n"
+        "lg = and(k, 1);\n"
+        "lg2 = not(lg);\n"
+        "b = bpf~(d, 1200, 0.7);\n"
+        "gx = xor~(b, 0);\n"
+        "gy = not~(gx);\n"
+        "m1 = min~(gy, 0.7);\n"
+        "m2 = max~(m1, 0.1);\n"
+        "k2 = min(k, 1);\n"
+        "k3 = max(k2, 0);\n"
+        "k4 = abs(k3);\n"
+        "lr = lores~(m2, 900, 0.4);\n"
+        "ar = abs~(lr);\n"
+        "rv = random(1, 3);\n"
+        "s = svf~(ar, 800, 0.7, 1);\n"
+        "a = apf~(s, 5, 0.5);\n"
+        "c = comb~(a, 10, 0.6);\n"
+        "dac~(c, c);\n";
+
+    const auto r = duodsp::text::compile(source, nullptr);
+    require(r.diagnostics.empty(), "New filter/delay objects should compile without diagnostics.");
+    const auto printed = duodsp::text::prettyPrint(r.graph);
+    require(printed.find("delay~(") != std::string::npos, "Pretty print should include delay~.");
+    require(printed.find("delay(") != std::string::npos, "Pretty print should include control delay.");
+    require(printed.find("and(") != std::string::npos, "Pretty print should include control logic.");
+    require(printed.find("not(") != std::string::npos, "Pretty print should include control NOT.");
+    require(printed.find("xor~(") != std::string::npos, "Pretty print should include audio logic.");
+    require(printed.find("not~(") != std::string::npos, "Pretty print should include audio NOT.");
+    require(printed.find("min~(") != std::string::npos, "Pretty print should include audio min.");
+    require(printed.find("max~(") != std::string::npos, "Pretty print should include audio max.");
+    require(printed.find("min(") != std::string::npos, "Pretty print should include control min.");
+    require(printed.find("max(") != std::string::npos, "Pretty print should include control max.");
+    require(printed.find("abs~(") != std::string::npos, "Pretty print should include audio abs.");
+    require(printed.find("abs(") != std::string::npos, "Pretty print should include control abs.");
+    require(printed.find("random(") != std::string::npos, "Pretty print should include random.");
+    require(printed.find("bpf~(") != std::string::npos, "Pretty print should include bpf~.");
+    require(printed.find("lores~(") != std::string::npos, "Pretty print should include lores~.");
+    require(printed.find("svf~(") != std::string::npos, "Pretty print should include svf~.");
+    require(printed.find("apf~(") != std::string::npos, "Pretty print should include apf~.");
+    require(printed.find("comb~(") != std::string::npos, "Pretty print should include comb~.");
+}
+
+void testCodePanelUsesDisplayAliases()
+{
+    const std::string source =
+        "a = delay(1, 5);\n"
+        "b = mtof~(69);\n"
+        "c = comp~(b, 100);\n"
+        "d = and~(c, 1);\n"
+        "e = min~(d, 0.8);\n"
+        "f = max~(e, 0.1);\n"
+        "fa = abs~(f);\n"
+        "g = and(1, 1);\n"
+        "h = max(g, 0);\n"
+        "ha = abs(h);\n"
+        "r = random(0, 1);\n"
+        "dac~(fa, fa);\n";
+
+    const auto r = duodsp::text::compile(source, nullptr);
+    require(r.diagnostics.empty(), "Alias source should compile without diagnostics.");
+    const auto printed = duodsp::text::prettyPrint(r.graph);
+
+    require(printed.find("cdelay(") == std::string::npos, "Code panel leaked internal cdelay name.");
+    require(printed.find("mtof_sig(") == std::string::npos, "Code panel leaked internal mtof_sig name.");
+    require(printed.find("comp_sig(") == std::string::npos, "Code panel leaked internal comp_sig name.");
+    require(printed.find("and_sig(") == std::string::npos, "Code panel leaked internal and_sig name.");
+    require(printed.find("or_sig(") == std::string::npos, "Code panel leaked internal or_sig name.");
+    require(printed.find("xor_sig(") == std::string::npos, "Code panel leaked internal xor_sig name.");
+    require(printed.find("not_sig(") == std::string::npos, "Code panel leaked internal not_sig name.");
+    require(printed.find("min_sig(") == std::string::npos, "Code panel leaked internal min_sig name.");
+    require(printed.find("max_sig(") == std::string::npos, "Code panel leaked internal max_sig name.");
+    require(printed.find("abs_sig(") == std::string::npos, "Code panel leaked internal abs_sig name.");
+}
+
+void testCodeViewDisplaysNodeParameters()
+{
+    auto expectContains = [](const std::string& source, const std::string& needle, const std::string& label)
+    {
+        const auto r = duodsp::text::compile(source, nullptr);
+        require(r.diagnostics.empty(), "Compile failed for " + label);
+        const auto printed = duodsp::text::prettyPrint(r.graph);
+        require(printed.find(needle) != std::string::npos, "Code view missing expected parameter display for " + label);
+    };
+
+    expectContains("x = delay~(1, 250);\ndac~(x, x);\n", "delay~(1, 250)", "delay~");
+    expectContains("x = delay(1, 250);\ndac~(x, x);\n", "delay(1, 250)", "delay");
+    expectContains("x = lores~(1, 1200, 0.5);\ndac~(x, x);\n", "lores~(1, 1200, 0.5)", "lores~");
+    expectContains("x = bpf~(1, 1200, 0.7);\ndac~(x, x);\n", "bpf~(1, 1200, 0.7)", "bpf~");
+    expectContains("x = svf~(1, 1200, 0.7, 1);\ndac~(x, x);\n", "svf~(1, 1200, 0.7, 1)", "svf~");
+    expectContains("x = apf~(1, 20, 0.5);\ndac~(x, x);\n", "apf~(1, 20, 0.5)", "apf~");
+    expectContains("x = comb~(1, 30, 0.7);\ndac~(x, x);\n", "comb~(1, 30, 0.7)", "comb~");
+    expectContains("x = clip~(1, 0, 0.2);\ndac~(x, x);\n", "clip~(1, 0, 0.2)", "clip~");
+    expectContains("x = tanh~(1, 0.5);\ndac~(x, x);\n", "tanh~(1, 0.5)", "tanh~");
+    expectContains("x = slew~(1, 50);\ndac~(x, x);\n", "slew~(1, 50)", "slew~");
+    expectContains("x = sah~(1, 1);\ndac~(x, x);\n", "sah~(1, 1)", "sah~");
+    expectContains("x = comp~(1, 0.5);\ndac~(x, x);\n", "comp~(1, 0.5)", "comp~");
+    expectContains("x = min~(1, 0.5);\ndac~(x, x);\n", "min~(1, 0.5)", "min~");
+    expectContains("x = max~(1, 0.5);\ndac~(x, x);\n", "max~(1, 0.5)", "max~");
+    expectContains("x = random(1, 2, 4);\ndac~(x, x);\n", "random(1, 2, 4)", "random");
+    expectContains("x = mtof~(69);\ndac~(x, x);\n", "mtof~(69)", "mtof~");
+    expectContains("x = mtof(69);\ndac~(x, x);\n", "mtof(69)", "mtof");
+    expectContains("x = abs~(0.5);\ndac~(x, x);\n", "abs~(0.5)", "abs~");
+    expectContains("x = abs(0.5);\ndac~(x, x);\n", "abs(0.5)", "abs");
 }
 
 std::string jsonEscape(const std::string& s)
@@ -331,6 +616,11 @@ int main(int argc, char** argv)
         { "probe_targeting", &testProbeTargeting },
         { "control_math_code", &testControlMathCodeRoundTrip },
         { "label_defaults", &testLabelDefaultsForNodes },
+        { "sample_hold", &testSampleAndHoldNode },
+        { "bang_node", &testBangNode },
+        { "filter_delay_code", &testNewFilterDelayCodeRoundTrip },
+        { "code_aliases", &testCodePanelUsesDisplayAliases },
+        { "code_params", &testCodeViewDisplaysNodeParameters },
     };
 
     std::vector<TestResult> results;

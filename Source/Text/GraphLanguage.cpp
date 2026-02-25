@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
@@ -527,12 +528,46 @@ std::string canonicalOpFromCallName(const std::string& name)
         return "lpf";
     if (name == "hip~")
         return "hpf";
+    if (name == "lores~")
+        return "lores";
+    if (name == "bpf~")
+        return "bpf";
+    if (name == "svf~")
+        return "svf";
+    if (name == "delay~")
+        return "delay";
+    if (name == "delay")
+        return "cdelay";
+    if (name == "apf~")
+        return "apf";
+    if (name == "comb~")
+        return "comb";
+    if (name == "comp~")
+        return "comp_sig";
+    if (name == "abs~")
+        return "abs_sig";
+    if (name == "min~")
+        return "min_sig";
+    if (name == "max~")
+        return "max_sig";
+    if (name == "and~")
+        return "and_sig";
+    if (name == "or~")
+        return "or_sig";
+    if (name == "xor~")
+        return "xor_sig";
+    if (name == "not~")
+        return "not_sig";
     if (name == "clip~")
         return "clip";
     if (name == "tanh~")
         return "tanh";
     if (name == "slew~")
         return "slew";
+    if (name == "sah~")
+        return "sah";
+    if (name == "mtof~")
+        return "mtof_sig";
     if (name == "pow~")
         return "pow";
     if (name == "mod~")
@@ -554,12 +589,46 @@ std::string displayCallNameFromOp(const std::string& op)
         return "lop~";
     if (op == "hpf")
         return "hip~";
+    if (op == "lores")
+        return "lores~";
+    if (op == "bpf")
+        return "bpf~";
+    if (op == "svf")
+        return "svf~";
+    if (op == "delay")
+        return "delay~";
+    if (op == "cdelay")
+        return "delay";
+    if (op == "apf")
+        return "apf~";
+    if (op == "comb")
+        return "comb~";
+    if (op == "comp_sig")
+        return "comp~";
+    if (op == "abs_sig")
+        return "abs~";
+    if (op == "min_sig")
+        return "min~";
+    if (op == "max_sig")
+        return "max~";
+    if (op == "and_sig")
+        return "and~";
+    if (op == "or_sig")
+        return "or~";
+    if (op == "xor_sig")
+        return "xor~";
+    if (op == "not_sig")
+        return "not~";
     if (op == "clip")
         return "clip~";
     if (op == "tanh")
         return "tanh~";
     if (op == "slew")
         return "slew~";
+    if (op == "sah")
+        return "sah~";
+    if (op == "mtof_sig")
+        return "mtof~";
     if (op == "pow")
         return "pow~";
     if (op == "mod")
@@ -755,15 +824,38 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
         memo[nodeId] = node->label;
         return memo[nodeId];
     }
+    const auto spec = ir::opSpecFor(node->op);
     const auto defaults = parseLabelDefaults(node->label);
+    auto defaultForPort = [&](const int port) -> std::string
+    {
+        if (port < 0)
+            return {};
+        if (defaults.empty())
+            return {};
+        if (port < static_cast<int>(defaults.size()) && defaults.size() == spec.inputs.size())
+            return formatDefaultNumber(defaults[static_cast<size_t>(port)]);
+        if (defaults.size() < spec.inputs.size() && !spec.inputs.empty())
+        {
+            const auto& first = spec.inputs.front().name;
+            const auto trailing = first == "in" || first == "hot" || first == "a" || first == "left" || first == "trig";
+            if (trailing)
+            {
+                const auto start = static_cast<int>(spec.inputs.size() - defaults.size());
+                if (port >= start && port - start < static_cast<int>(defaults.size()))
+                    return formatDefaultNumber(defaults[static_cast<size_t>(port - start)]);
+                return {};
+            }
+        }
+        if (port < static_cast<int>(defaults.size()))
+            return formatDefaultNumber(defaults[static_cast<size_t>(port)]);
+        return {};
+    };
     auto argAt = [&](const int port) -> std::string
     {
         for (const auto* e : ins)
             if (e->toPort == port)
                 return exprForNode(graph, e->fromNodeId, memo);
-        if (port >= 0 && port < static_cast<int>(defaults.size()))
-            return formatDefaultNumber(defaults[static_cast<size_t>(port)]);
-        return {};
+        return defaultForPort(port);
     };
 
     if ((node->op == "add" || node->op == "sub" || node->op == "mul" || node->op == "div") && (!argAt(0).empty() || !argAt(1).empty()))
@@ -779,7 +871,6 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
         return memo[nodeId];
     }
 
-    const auto spec = ir::opSpecFor(node->op);
     const auto maxArgs = std::max(static_cast<int>(spec.inputs.size()), static_cast<int>(defaults.size()));
     std::vector<std::string> args;
     args.reserve(static_cast<size_t>(maxArgs));
@@ -914,9 +1005,8 @@ CompileResult compile(const std::string& source, const ir::Graph* previousGraph)
     if (!hasOut && !ctx.graph.bindings.empty())
     {
         const auto& fallback = ctx.graph.bindings.begin()->second;
-        const auto bus = ctx.addNode("constant", "0", 0, 0, 0.0);
         const auto out = ctx.addNode("out", "out", 0, 0);
-        ctx.connect(bus, out, 0);
+        ctx.connect(fallback, out, 0);
         ctx.connect(fallback, out, 1);
     }
 
@@ -942,7 +1032,17 @@ std::string prettyPrint(const ir::Graph& graph)
     std::vector<std::pair<std::string, std::string>> bindings;
     for (const auto& b : graph.bindings)
         bindings.push_back(b);
-    std::sort(bindings.begin(), bindings.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::unordered_map<std::string, int> nodeOrder;
+    for (int i = 0; i < static_cast<int>(graph.nodes.size()); ++i)
+        nodeOrder[graph.nodes[static_cast<size_t>(i)].id] = i;
+    std::sort(bindings.begin(), bindings.end(), [&](const auto& a, const auto& b)
+              {
+                  const auto ai = nodeOrder.contains(a.second) ? nodeOrder[a.second] : std::numeric_limits<int>::max();
+                  const auto bi = nodeOrder.contains(b.second) ? nodeOrder[b.second] : std::numeric_limits<int>::max();
+                  if (ai != bi)
+                      return ai < bi;
+                  return a.first < b.first;
+              });
 
     auto isAutoBindingName = [](const std::string& name)
     {
@@ -998,22 +1098,29 @@ std::string prettyPrint(const ir::Graph& graph)
         if (n.op != "out")
             continue;
         const auto ins = inputEdgesFor(graph, n.id);
-        std::string busExpr = "0";
-        std::string sigExpr = "0";
-        bool sigConnected = false;
+        std::string leftExpr = "0";
+        std::string rightExpr = {};
+        bool leftConnected = false;
+        bool rightConnected = false;
         for (const auto* e : ins)
         {
             if (e->toPort == 0)
-                busExpr = refForNode(e->fromNodeId);
+            {
+                leftExpr = refForNode(e->fromNodeId);
+                leftConnected = true;
+            }
             else if (e->toPort == 1)
             {
-                sigExpr = refForNode(e->fromNodeId);
-                sigConnected = true;
+                rightExpr = refForNode(e->fromNodeId);
+                rightConnected = true;
             }
         }
+        if (!rightConnected)
+            rightExpr = leftExpr;
 
-        out << "dac~(" << busExpr << ", " << sigExpr << "); // dac signal <- "
-            << (sigConnected ? sigExpr : std::string("(unconnected)")) << "\n";
+        out << "dac~(" << leftExpr << ", " << rightExpr << "); // dac L <- "
+            << (leftConnected ? leftExpr : std::string("(unconnected)"))
+            << ", R <- " << (rightConnected ? rightExpr : std::string("(mirrored L)")) << "\n";
     }
     return out.str();
 }
