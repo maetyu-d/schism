@@ -999,8 +999,9 @@ void GraphCanvas::mouseWheelMove(const juce::MouseEvent& event, const juce::Mous
 {
     const auto oldZoom = zoom;
     const auto worldAtCursor = screenToWorld(event.position);
-    const auto dy = juce::jlimit(-2.0f, 2.0f, wheel.deltaY);
-    const auto zoomFactor = std::exp(dy * 0.22f);
+    const auto dy = juce::jlimit(-1.25f, 1.25f, wheel.deltaY);
+    const auto sensitivity = wheel.isSmooth ? 0.42f : 0.30f;
+    const auto zoomFactor = std::exp(dy * sensitivity);
     zoom = juce::jlimit(0.3f, 3.0f, oldZoom * zoomFactor);
     if (std::abs(zoom - oldZoom) < 1.0e-6f)
         return;

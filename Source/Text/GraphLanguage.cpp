@@ -843,7 +843,11 @@ std::string prettyPrint(const ir::Graph& graph)
             continue;
         const auto ins = inputEdgesFor(graph, n.id);
         if (ins.size() >= 2)
-            out << "dac~(" << exprForNode(graph, ins[0]->fromNodeId, memo) << ", " << exprForNode(graph, ins[1]->fromNodeId, memo) << ");\n";
+        {
+            const auto busExpr = exprForNode(graph, ins[0]->fromNodeId, memo);
+            const auto sigExpr = exprForNode(graph, ins[1]->fromNodeId, memo);
+            out << "dac~(" << busExpr << ", " << sigExpr << "); // dac signal <- " << sigExpr << "\n";
+        }
     }
     return out.str();
 }
