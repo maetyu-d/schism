@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <sstream>
 #include <set>
@@ -21,6 +22,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(codeEditor);
     addAndMakeVisible(syncLabel);
     addAndMakeVisible(statusLabel);
+    addAndMakeVisible(applyCodeButton);
     addAndMakeVisible(scopeLabel);
     addAndMakeVisible(spectrumLabel);
     addAndMakeVisible(scopeProbeSelect);
@@ -95,10 +97,22 @@ MainComponent::MainComponent()
                     return "bpf~ 1200 0.7";
                 if (o == "svf")
                     return "svf~ 1200 0.7 0";
+                if (o == "freeverb")
+                    return "freeverb~ 0.75 0.3 1 0.2";
+                if (o == "plate")
+                    return "plate~ 0.7 0.3 0.2";
+                if (o == "reverb")
+                    return "reverb~ 0.7 0.3 0.2";
+                if (o == "fdn")
+                    return "fdn~ 0.7 0.3 0.2";
+                if (o == "convrev")
+                    return "convrev~ 0.5 0.2";
                 if (o == "delay")
                     return "delay~ 250";
                 if (o == "cdelay")
                     return "delay 250";
+                if (o == "metro")
+                    return "metro 250";
                 if (o == "apf")
                     return "apf~ 20 0.5";
                 if (o == "comb")
@@ -111,6 +125,34 @@ MainComponent::MainComponent()
                     return "slew~ 50";
                 if (o == "sah")
                     return "sah~";
+                if (o == "sah_c")
+                    return "sah";
+                if (o == "line")
+                    return "line 50";
+                if (o == "line_sig")
+                    return "line~ 50";
+                if (o == "vline")
+                    return "vline~ 50";
+                if (o == "ad")
+                    return "ad~ 10 120";
+                if (o == "toggle")
+                    return "toggle";
+                if (o == "select")
+                    return "select 1";
+                if (o == "trigger")
+                    return "trigger";
+                if (o == "pack")
+                    return "pack";
+                if (o == "unpack")
+                    return "unpack";
+                if (o == "snapshot")
+                    return "snapshot~";
+                if (o == "pan")
+                    return "pan~ 0.5";
+                if (o == "env")
+                    return "env~ 50";
+                if (o == "peak")
+                    return "peak~ 150";
                 if (o == "mtof")
                     return "mtof 69";
                 if (o == "mtof_sig")
@@ -244,6 +286,16 @@ MainComponent::MainComponent()
                             return "bpf";
                         if (h == "svf~")
                             return "svf";
+                        if (h == "freeverb~")
+                            return "freeverb";
+                        if (h == "plate~")
+                            return "plate";
+                        if (h == "reverb~")
+                            return "reverb";
+                        if (h == "fdn~")
+                            return "fdn";
+                        if (h == "convrev~")
+                            return "convrev";
                         if (h == "delay~")
                             return "delay";
                         if (h == "delay")
@@ -260,6 +312,36 @@ MainComponent::MainComponent()
                             return "slew";
                         if (h == "sah~")
                             return "sah";
+                        if (h == "sah")
+                            return "sah_c";
+                        if (h == "line")
+                            return "line";
+                        if (h == "line~")
+                            return "line_sig";
+                        if (h == "vline~")
+                            return "vline";
+                        if (h == "ad~")
+                            return "ad";
+                        if (h == "metro")
+                            return "metro";
+                        if (h == "toggle")
+                            return "toggle";
+                        if (h == "select")
+                            return "select";
+                        if (h == "trigger" || h == "t")
+                            return "trigger";
+                        if (h == "pack")
+                            return "pack";
+                        if (h == "unpack")
+                            return "unpack";
+                        if (h == "snapshot~")
+                            return "snapshot";
+                        if (h == "pan~")
+                            return "pan";
+                        if (h == "env~")
+                            return "env";
+                        if (h == "peak~")
+                            return "peak";
                         if (h == "mtof")
                             return "mtof";
                         if (h == "mtof~")
@@ -401,8 +483,16 @@ MainComponent::MainComponent()
     codeEditor.setColour(juce::CodeEditorComponent::lineNumberBackgroundId, juce::Colour(0xffd8d8d8));
     syncLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+    applyCodeButton.onClick = [this] { applyPendingCodeEdits(); };
+    applyCodeButton.setTooltip("Compile/apply code edits to update patch view");
+    applyCodeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff365d8d));
+    applyCodeButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff4f7bb0));
+    applyCodeButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    applyCodeButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
 
     setCodeContent("");
+    lastAppliedCodeText = codeDocument.getAllContent().toStdString();
+    refreshCodeApplyUi();
 
     setSize(1320, 860);
     setAudioChannels(0, 2);
@@ -467,6 +557,11 @@ bool MainComponent::keyPressed(const juce::KeyPress& key, juce::Component* origi
         editSelectAll();
         return true;
     }
+    if (key == juce::KeyPress(juce::KeyPress::returnKey, juce::ModifierKeys::commandModifier, 0))
+    {
+        applyPendingCodeEdits();
+        return true;
+    }
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey)
     {
         if (!codeEditor.hasKeyboardFocus(true) && graphCanvas.hasAnySelection())
@@ -493,7 +588,10 @@ void MainComponent::resized()
     auto rail = bounds.removeFromLeft(splitterW);
     auto right = bounds;
     rightPaneBounds = right;
-    statusLabel.setBounds(right.getX(), topBar.getY(), right.getWidth(), topBar.getHeight());
+    auto statusArea = juce::Rectangle<int>(right.getX(), topBar.getY(), right.getWidth(), topBar.getHeight());
+    applyCodeButton.setBounds(statusArea.removeFromRight(118).reduced(0, 2));
+    statusArea.removeFromRight(8);
+    statusLabel.setBounds(statusArea);
 
     auto probesArea = right.removeFromBottom(220);
     probesArea.removeFromTop(6);
@@ -525,15 +623,25 @@ void MainComponent::paint(juce::Graphics& g)
     g.fillRect(splitX - 1, 40, 2, getHeight() - 50);
 }
 
-void MainComponent::codeDocumentTextInserted(const juce::String&, int)
+void MainComponent::codeDocumentTextInserted(const juce::String& insertedText, int)
 {
     if (!suppressEditorEvents)
     {
         preferredPreviousGraphForCompile.reset();
-        compilePending = true;
+        compilePending = autoApplyCodeEdits;
+        hasUnappliedCodeEdits = true;
+        autoApplyPreflightSnapshotTaken = false;
+        if (insertedText.containsChar('\n') || insertedText.containsChar(';') || insertedText.containsChar('}'))
+            autoApplySawStatementBoundary = true;
         textEditedSinceLastCompile = true;
         lastTextEditTimeMs = juce::Time::getMillisecondCounterHiRes();
         pendingEditOrigin = EditOrigin::text;
+        if (!autoApplyCodeEdits)
+        {
+            statusLabel.setText("Code edited (not applied)", juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+        }
+        refreshCodeApplyUi();
     }
 }
 
@@ -542,10 +650,18 @@ void MainComponent::codeDocumentTextDeleted(int, int)
     if (!suppressEditorEvents)
     {
         preferredPreviousGraphForCompile.reset();
-        compilePending = true;
+        compilePending = autoApplyCodeEdits;
+        hasUnappliedCodeEdits = true;
+        autoApplyPreflightSnapshotTaken = false;
         textEditedSinceLastCompile = true;
         lastTextEditTimeMs = juce::Time::getMillisecondCounterHiRes();
         pendingEditOrigin = EditOrigin::text;
+        if (!autoApplyCodeEdits)
+        {
+            statusLabel.setText("Code edited (not applied)", juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+        }
+        refreshCodeApplyUi();
     }
 }
 
@@ -553,8 +669,29 @@ void MainComponent::timerCallback()
 {
     if (compilePending)
     {
-        compileFromText();
-        compilePending = false;
+        bool shouldCompileNow = true;
+        if (autoApplyCodeEdits && pendingEditOrigin == EditOrigin::text)
+        {
+            const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+            const auto idleMs = nowMs - lastTextEditTimeMs;
+            constexpr double autoApplyDebounceMs = 1600.0;
+            constexpr double autoApplyForceAfterMs = 5000.0;
+            if (idleMs < autoApplyDebounceMs)
+                shouldCompileNow = false;
+            if (!autoApplySawStatementBoundary && idleMs < autoApplyForceAfterMs)
+                shouldCompileNow = false;
+            if (shouldCompileNow && !autoApplyPreflightSnapshotTaken && !isRestoringHistory)
+            {
+                // Keep a rollback point before any automatic graph change.
+                pushHistorySnapshot(false);
+                autoApplyPreflightSnapshotTaken = true;
+            }
+        }
+        if (shouldCompileNow)
+        {
+            compileFromText();
+            compilePending = false;
+        }
     }
 
     const auto triggeredBangs = runtime.consumeTriggeredBangIds();
@@ -595,9 +732,35 @@ void MainComponent::timerCallback()
         return n.op == "floatatom";
     });
     if (!hasFloatatom)
+    {
+        lastKnownFloatatomValues.clear();
         graphCanvas.setFloatatomLiveValues({});
-    else if (!floatValues.empty())
-        graphCanvas.setFloatatomLiveValues(floatValues);
+    }
+    else
+    {
+        if (!floatValues.empty())
+            lastKnownFloatatomValues = floatValues;
+        graphCanvas.setFloatatomLiveValues(lastKnownFloatatomValues);
+    }
+
+    refreshCodeApplyUi();
+}
+
+void MainComponent::applyPendingCodeEdits()
+{
+    if (!hasUnappliedCodeEdits)
+        return;
+    autoApplySawStatementBoundary = true;
+    compilePending = true;
+    compileFromText();
+    compilePending = false;
+    refreshCodeApplyUi();
+}
+
+void MainComponent::refreshCodeApplyUi()
+{
+    applyCodeButton.setEnabled(hasUnappliedCodeEdits);
+    applyCodeButton.setButtonText(hasUnappliedCodeEdits ? "Apply Code*" : "Apply Code");
 }
 
 void MainComponent::setCodeContent(const juce::String& content, const bool queueCompile)
@@ -648,6 +811,8 @@ void MainComponent::restoreHistory(const size_t index)
     setCodeContent(history[index].source);
     compileFromText();
     compilePending = false;
+    hasUnappliedCodeEdits = false;
+    refreshCodeApplyUi();
     historyIndex = index;
     isRestoringHistory = false;
 }
@@ -729,8 +894,9 @@ void MainComponent::applyGraphMutation(const std::function<void(duodsp::ir::Grap
 
     currentGraph = mutated;
 
-    const auto pretty = juce::String(duodsp::text::prettyPrint(mutated));
+    const auto pretty = juce::String(duodsp::text::prettyPrint(mutated, codeViewVerbose));
     setCodeContent(pretty, false);
+    lastAppliedCodeText = pretty.toStdString();
     compilePending = false;
 
     currentSyncMap.clear();
@@ -858,9 +1024,11 @@ void MainComponent::loadPatchFromFile()
                                 }
 
                                 // Rebuild code pane from loaded graph to keep both views in sync.
-                                const auto pretty = juce::String(duodsp::text::prettyPrint(currentGraph));
+                                const auto pretty = juce::String(duodsp::text::prettyPrint(currentGraph, codeViewVerbose));
                                 setCodeContent(pretty, false);
                                 compilePending = false;
+                                hasUnappliedCodeEdits = false;
+                                refreshCodeApplyUi();
 
                                 // Rebuild sync map from the pretty-printed code for selection linking.
                                 currentSyncMap.clear();
@@ -903,6 +1071,11 @@ void MainComponent::loadPatchFromFile()
                                 runtime.setGraph(currentGraph);
                                 refreshProbeSelectors();
                                 compilePending = false;
+                                hasUnappliedCodeEdits = false;
+                                autoApplySawStatementBoundary = false;
+                                autoApplyPreflightSnapshotTaken = false;
+                                lastAppliedCodeText = codeDocument.getAllContent().toStdString();
+                                refreshCodeApplyUi();
 
                                 currentPatchFile = file;
                                 statusLabel.setText("Loaded: " + file.getFileName(), juce::dontSendNotification);
@@ -920,8 +1093,11 @@ void MainComponent::newPatch()
     historyIndex = 0;
     hasCommittedInitialSnapshot = false;
     setCodeContent("");
+    lastAppliedCodeText = codeDocument.getAllContent().toStdString();
     compileFromText();
     compilePending = false;
+    hasUnappliedCodeEdits = false;
+    refreshCodeApplyUi();
     statusLabel.setText("New patch", juce::dontSendNotification);
     statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
 }
@@ -987,11 +1163,17 @@ juce::PopupMenu MainComponent::getMenuForIndex(const int topLevelMenuIndex, cons
     juce::PopupMenu menu;
     if (topLevelMenuIndex == 0)
     {
+        juce::PopupMenu preferences;
+        preferences.addItem(6, "Verbose Code View", true, codeViewVerbose);
+        preferences.addItem(7, "Auto Apply Code While Typing", true, autoApplyCodeEdits);
+        preferences.addItem(8, "Safe Text Apply (Topology Lock)", true, strictTextApplySafety);
         menu.addItem(1, "New");
         menu.addSeparator();
         menu.addItem(2, "Open...");
         menu.addItem(3, "Save");
         menu.addItem(4, "Save As...");
+        menu.addSeparator();
+        menu.addSubMenu("Preferences", preferences);
         menu.addSeparator();
         menu.addItem(5, "Quit");
     }
@@ -1032,6 +1214,73 @@ void MainComponent::menuItemSelected(const int menuItemID, const int topLevelMen
             if (auto* app = juce::JUCEApplication::getInstance(); app != nullptr)
                 app->systemRequestedQuit();
             break;
+        case 6:
+        {
+            codeViewVerbose = !codeViewVerbose;
+            const auto pretty = juce::String(duodsp::text::prettyPrint(currentGraph, codeViewVerbose));
+            setCodeContent(pretty, false);
+            compilePending = false;
+
+            currentSyncMap.clear();
+            const auto prettyStd = pretty.toStdString();
+            std::vector<std::pair<std::string, std::string>> bindingPairs;
+            for (const auto& b : currentGraph.bindings)
+                bindingPairs.push_back(b);
+            std::sort(bindingPairs.begin(), bindingPairs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+            size_t cursor = 0;
+            for (const auto& [name, nodeId] : bindingPairs)
+            {
+                const auto needle = name + " = ";
+                auto pos = prettyStd.find(needle, cursor);
+                if (pos == std::string::npos)
+                    pos = prettyStd.find(needle);
+                if (pos == std::string::npos)
+                    continue;
+                auto end = prettyStd.find(';', pos);
+                if (end == std::string::npos)
+                    end = pos + needle.size();
+                currentSyncMap.addRange(nodeId, static_cast<int>(pos), static_cast<int>(end + 1));
+                cursor = end + 1;
+            }
+            size_t outCursor = 0;
+            for (const auto& n : currentGraph.nodes)
+            {
+                if (n.op != "out")
+                    continue;
+                auto pos = prettyStd.find("dac~(", outCursor);
+                if (pos == std::string::npos)
+                    pos = prettyStd.find("out(", outCursor);
+                if (pos == std::string::npos)
+                    break;
+                auto end = prettyStd.find(';', pos);
+                if (end == std::string::npos)
+                    end = pos + 4;
+                currentSyncMap.addRange(n.id, static_cast<int>(pos), static_cast<int>(end + 1));
+                outCursor = end + 1;
+            }
+            statusLabel.setText(codeViewVerbose ? "Code view: verbose" : "Code view: compact", juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+            break;
+        }
+        case 7:
+        {
+            autoApplyCodeEdits = !autoApplyCodeEdits;
+            statusLabel.setText(autoApplyCodeEdits ? "Code auto-apply: on" : "Code auto-apply: off", juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+            if (autoApplyCodeEdits && hasUnappliedCodeEdits)
+                applyPendingCodeEdits();
+            refreshCodeApplyUi();
+            break;
+        }
+        case 8:
+        {
+            strictTextApplySafety = !strictTextApplySafety;
+            statusLabel.setText(strictTextApplySafety ? "Text apply safety: topology lock on" : "Text apply safety: topology lock off",
+                                juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+            break;
+        }
         case 101:
             undo();
             break;
@@ -1202,10 +1451,479 @@ void MainComponent::compileFromText()
 {
     const auto source = codeDocument.getAllContent().toStdString();
     const auto* previousGraph = preferredPreviousGraphForCompile.has_value() ? &(*preferredPreviousGraphForCompile) : &currentGraph;
+    const auto previousGraphSnapshot = currentGraph;
+    const auto previousSyncSnapshot = currentSyncMap;
+    const auto previousLayoutSnapshot = nodeLayout;
     const auto result = duodsp::text::compile(source, previousGraph);
     preferredPreviousGraphForCompile.reset();
-    currentGraph = result.graph;
+    if (!result.diagnostics.empty())
+    {
+        // Keep last valid graph/audio running while user text is invalid.
+        statusLabel.setText("Compile issues: " + juce::String(static_cast<int>(result.diagnostics.size())) + " (" + juce::String(result.diagnostics.front().message) + ")",
+                            juce::dontSendNotification);
+        statusLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+        hasUnappliedCodeEdits = true;
+        refreshCodeApplyUi();
+        return;
+    }
+
+    auto usedSafeParamTransplant = false;
+    std::optional<duodsp::ir::Graph> safeMergedGraph;
+    if (pendingEditOrigin == EditOrigin::text && !previousGraphSnapshot.nodes.empty())
+    {
+        auto normalizeNumericAgnostic = [](const std::string& text)
+        {
+            std::string stripped = text;
+            const std::string marker = "\n// === DAC ROUTING ===\n";
+            if (const auto pos = stripped.find(marker); pos != std::string::npos)
+                stripped.erase(pos);
+
+            std::string out;
+            out.reserve(stripped.size());
+            for (size_t i = 0; i < stripped.size();)
+            {
+                const auto c = stripped[i];
+                if (c == '/' && i + 1 < stripped.size() && stripped[i + 1] == '/')
+                {
+                    while (i < stripped.size() && stripped[i] != '\n')
+                        ++i;
+                    continue;
+                }
+                const auto identStart = std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+                if (identStart)
+                {
+                    size_t j = i + 1;
+                    while (j < stripped.size())
+                    {
+                        const auto cj = stripped[j];
+                        if (!std::isalnum(static_cast<unsigned char>(cj)) && cj != '_' && cj != '~')
+                            break;
+                        ++j;
+                    }
+                    out.append(stripped.substr(i, j - i));
+                    i = j;
+                    continue;
+                }
+                const auto isNumericStart = std::isdigit(static_cast<unsigned char>(c))
+                                            || (c == '-' && i + 1 < stripped.size() && std::isdigit(static_cast<unsigned char>(stripped[i + 1])));
+                if (isNumericStart)
+                {
+                    size_t j = i + (c == '-' ? 1 : 0);
+                    while (j < stripped.size() && std::isdigit(static_cast<unsigned char>(stripped[j])))
+                        ++j;
+                    if (j < stripped.size() && stripped[j] == '.')
+                    {
+                        ++j;
+                        while (j < stripped.size() && std::isdigit(static_cast<unsigned char>(stripped[j])))
+                            ++j;
+                    }
+                    i = j;
+                    continue;
+                }
+                if (!std::isspace(static_cast<unsigned char>(c)))
+                    out.push_back(c);
+                ++i;
+            }
+            return out;
+        };
+        auto localNodeSignature = [](const duodsp::ir::Graph& g, const duodsp::ir::Node& n)
+        {
+            std::vector<std::string> ins;
+            int outDegree = 0;
+            for (const auto& e : g.edges)
+            {
+                if (e.toNodeId == n.id)
+                {
+                    const auto* src = g.findNode(e.fromNodeId);
+                    const auto srcOp = src != nullptr ? src->op : "missing";
+                    ins.push_back(std::to_string(e.toPort) + ":" + srcOp);
+                }
+                if (e.fromNodeId == n.id)
+                    ++outDegree;
+            }
+            std::sort(ins.begin(), ins.end());
+            std::string sig = n.op + "|out=" + std::to_string(outDegree) + "|in=";
+            for (size_t i = 0; i < ins.size(); ++i)
+            {
+                sig += ins[i];
+                if (i + 1 < ins.size())
+                    sig += ",";
+            }
+            return sig;
+        };
+        auto transplantParamsOntoPrevious = [&](const duodsp::ir::Graph& previousG, const duodsp::ir::Graph& nextG)
+        {
+            auto merged = previousG;
+            auto extractNumericValue = [&](const duodsp::ir::Node& node) -> std::optional<double>
+            {
+                if (node.op == "constant")
+                    return node.literal;
+                if (node.op == "floatatom")
+                {
+                    if (node.literal.has_value())
+                        return node.literal;
+                    for (const auto& e : nextG.edges)
+                    {
+                        if (e.toNodeId != node.id || e.toPort != 0)
+                            continue;
+                        const auto* src = nextG.findNode(e.fromNodeId);
+                        if (src != nullptr && src->op == "constant" && src->literal.has_value())
+                            return src->literal;
+                    }
+                }
+                return std::nullopt;
+            };
+            auto inferredFloatatomValue = [&](const duodsp::ir::Node& nextNode) -> std::optional<double>
+            {
+                if (nextNode.op != "floatatom")
+                    return nextNode.literal;
+                for (const auto& e : nextG.edges)
+                {
+                    if (e.toNodeId != nextNode.id || e.toPort != 0)
+                        continue;
+                    const auto* src = nextG.findNode(e.fromNodeId);
+                    if (src != nullptr && src->op == "constant" && src->literal.has_value())
+                        return src->literal;
+                }
+                return nextNode.literal;
+            };
+            std::unordered_map<std::string, const duodsp::ir::Node*> nextById;
+            nextById.reserve(nextG.nodes.size());
+            for (const auto& n : nextG.nodes)
+                nextById[n.id] = &n;
+
+            std::unordered_set<std::string> usedNextIds;
+            auto applyNode = [&](duodsp::ir::Node& dst, const duodsp::ir::Node& src) -> bool
+            {
+                const auto numericCompat = (dst.op == "floatatom" || dst.op == "constant") && (src.op == "floatatom" || src.op == "constant");
+                if (dst.op != src.op && !numericCompat)
+                    return false;
+                auto changed = false;
+                auto srcLabel = src.label;
+                auto srcLiteral = src.literal;
+                if (dst.op == "floatatom" && numericCompat)
+                {
+                    if (const auto v = extractNumericValue(src); v.has_value())
+                    {
+                        srcLiteral = v;
+                        std::ostringstream s;
+                        s << *v;
+                        srcLabel = s.str();
+                    }
+                }
+                else if (dst.op == "constant" && numericCompat)
+                {
+                    if (const auto v = extractNumericValue(src); v.has_value())
+                    {
+                        srcLiteral = v;
+                        std::ostringstream s;
+                        s << *v;
+                        srcLabel = s.str();
+                    }
+                }
+                else if (dst.op == "floatatom")
+                {
+                    if (const auto inferred = inferredFloatatomValue(src); inferred.has_value())
+                    {
+                        srcLiteral = inferred;
+                        std::ostringstream s;
+                        s << *inferred;
+                        srcLabel = s.str();
+                    }
+                }
+                else
+                {
+                    // For non-numeric carriers, only accept label updates that include at least one
+                    // numeric token. This keeps argument-bearing objects (e.g. random 0 500) in sync,
+                    // while avoiding regressions where bare op names overwrite rich labels.
+                    auto hasNumericToken = [](const std::string& label)
+                    {
+                        std::istringstream iss(label);
+                        std::string tok;
+                        while (iss >> tok)
+                        {
+                            char* end = nullptr;
+                            const auto v = std::strtod(tok.c_str(), &end);
+                            juce::ignoreUnused(v);
+                            if (end != tok.c_str() && end != nullptr && *end == '\0')
+                                return true;
+                        }
+                        return false;
+                    };
+                    if (hasNumericToken(srcLabel) && dst.label != srcLabel)
+                    {
+                        dst.label = srcLabel;
+                        changed = true;
+                    }
+                    usedNextIds.insert(src.id);
+                    return changed;
+                }
+                if (dst.label != srcLabel)
+                {
+                    dst.label = srcLabel;
+                    changed = true;
+                }
+                if (dst.literal != srcLiteral)
+                {
+                    dst.literal = srcLiteral;
+                    changed = true;
+                }
+                usedNextIds.insert(src.id);
+                return changed;
+            };
+
+            int changed = 0;
+            // Phase 1: stable id
+            for (auto& oldNode : merged.nodes)
+            {
+                if (!nextById.contains(oldNode.id))
+                    continue;
+                if (applyNode(oldNode, *nextById[oldNode.id]))
+                    ++changed;
+            }
+
+            // Phase 2: binding name
+            for (const auto& [name, oldId] : previousG.bindings)
+            {
+                if (!nextG.bindings.contains(name))
+                    continue;
+                const auto& nextId = nextG.bindings.at(name);
+                if (!nextById.contains(nextId) || usedNextIds.contains(nextId))
+                    continue;
+                auto* oldNode = merged.findNode(oldId);
+                if (oldNode == nullptr)
+                    continue;
+                if (applyNode(*oldNode, *nextById[nextId]))
+                    ++changed;
+            }
+
+            // Phase 3: local structural signature
+            std::unordered_map<std::string, std::vector<const duodsp::ir::Node*>> nextBySig;
+            for (const auto& n : nextG.nodes)
+            {
+                if (usedNextIds.contains(n.id))
+                    continue;
+                nextBySig[localNodeSignature(nextG, n)].push_back(&n);
+            }
+            for (auto& oldNode : merged.nodes)
+            {
+                if (usedNextIds.contains(oldNode.id))
+                    continue;
+                const auto sig = localNodeSignature(previousG, oldNode);
+                if (!nextBySig.contains(sig))
+                    continue;
+                auto& cands = nextBySig[sig];
+                while (!cands.empty() && usedNextIds.contains(cands.back()->id))
+                    cands.pop_back();
+                if (cands.empty())
+                    continue;
+                if (applyNode(oldNode, *cands.back()))
+                    ++changed;
+            }
+
+            // Phase 4: op-order fallback
+            std::unordered_map<std::string, std::vector<const duodsp::ir::Node*>> nextByOp;
+            std::unordered_map<std::string, size_t> opCursor;
+            for (const auto& n : nextG.nodes)
+            {
+                if (!usedNextIds.contains(n.id))
+                    nextByOp[n.op].push_back(&n);
+            }
+            for (auto& oldNode : merged.nodes)
+            {
+                auto& vec = nextByOp[oldNode.op];
+                auto& cursor = opCursor[oldNode.op];
+                if (cursor >= vec.size())
+                    continue;
+                if (applyNode(oldNode, *vec[cursor]))
+                    ++changed;
+                ++cursor;
+            }
+
+            return std::pair { merged, changed };
+        };
+        const auto oldNodeCount = static_cast<int>(previousGraphSnapshot.nodes.size());
+        const auto newNodeCount = static_cast<int>(result.graph.nodes.size());
+        const auto oldEdgeCount = static_cast<int>(previousGraphSnapshot.edges.size());
+        const auto newEdgeCount = static_cast<int>(result.graph.edges.size());
+        const auto oldOutCount = static_cast<int>(std::count_if(previousGraphSnapshot.nodes.begin(), previousGraphSnapshot.nodes.end(),
+                                                                [](const auto& n)
+                                                                { return n.op == "out"; }));
+        const auto newOutCount = static_cast<int>(std::count_if(result.graph.nodes.begin(), result.graph.nodes.end(),
+                                                                [](const auto& n)
+                                                                { return n.op == "out"; }));
+
+        const auto suspiciousShrink = oldNodeCount >= 6 && newNodeCount <= oldNodeCount / 2;
+        const auto suspiciousEdgeDrop = oldEdgeCount >= 6 && newEdgeCount <= oldEdgeCount / 3;
+        const auto suspiciousLostOutput = oldOutCount > 0 && newOutCount == 0;
+        if (suspiciousShrink || suspiciousEdgeDrop || suspiciousLostOutput)
+        {
+            statusLabel.setText("Apply blocked: suspicious destructive graph change", juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+            hasUnappliedCodeEdits = true;
+            refreshCodeApplyUi();
+            return;
+        }
+
+        if (strictTextApplySafety)
+        {
+            auto opHistogram = [](const duodsp::ir::Graph& g)
+            {
+                std::unordered_map<std::string, int> hist;
+                for (const auto& n : g.nodes)
+                    ++hist[n.op];
+                return hist;
+            };
+            auto edgeHistogram = [](const duodsp::ir::Graph& g)
+            {
+                std::unordered_map<std::string, int> hist;
+                for (const auto& e : g.edges)
+                {
+                    const auto* from = g.findNode(e.fromNodeId);
+                    const auto* to = g.findNode(e.toNodeId);
+                    if (from == nullptr || to == nullptr)
+                        continue;
+                    const auto key = from->op + "->" + to->op + ":" + std::to_string(e.toPort);
+                    ++hist[key];
+                }
+                return hist;
+            };
+            auto bindingShape = [](const duodsp::ir::Graph& g)
+            {
+                std::unordered_map<std::string, std::string> shape;
+                for (const auto& [name, id] : g.bindings)
+                {
+                    const auto* n = g.findNode(id);
+                    shape[name] = n != nullptr ? n->op : std::string("missing");
+                }
+                return shape;
+            };
+
+            const auto sameTopology = opHistogram(previousGraphSnapshot) == opHistogram(result.graph)
+                                      && edgeHistogram(previousGraphSnapshot) == edgeHistogram(result.graph)
+                                      && bindingShape(previousGraphSnapshot) == bindingShape(result.graph);
+            auto needsSafeTransplant = false;
+            if (!sameTopology)
+            {
+                const auto numericOnlyEdit = normalizeNumericAgnostic(source) == normalizeNumericAgnostic(lastAppliedCodeText);
+                if (!numericOnlyEdit)
+                {
+                    statusLabel.setText("Apply blocked: text edit changed graph topology (safe mode)", juce::dontSendNotification);
+                    statusLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+                    hasUnappliedCodeEdits = true;
+                    refreshCodeApplyUi();
+                    return;
+                }
+                needsSafeTransplant = true;
+            }
+
+            if (needsSafeTransplant)
+            {
+                const auto [merged, changed] = transplantParamsOntoPrevious(previousGraphSnapshot, result.graph);
+                safeMergedGraph = merged;
+                usedSafeParamTransplant = changed > 0;
+            }
+        }
+    }
+
+    if (safeMergedGraph.has_value())
+        currentGraph = *safeMergedGraph;
+    else
+        currentGraph = result.graph;
     currentSyncMap = result.syncMap;
+
+    // Robust numeric binding sync:
+    // when code edits change a bound numeric value (e.g. tempo 50->500),
+    // propagate that value onto the existing bound numeric carrier node.
+    auto bindingNumericValue = [&](const duodsp::ir::Graph& g, const std::string& bindingName) -> std::optional<double>
+    {
+        if (!g.bindings.contains(bindingName))
+            return std::nullopt;
+        const auto& id = g.bindings.at(bindingName);
+        const auto* n = g.findNode(id);
+        if (n == nullptr)
+            return std::nullopt;
+        if (n->op == "constant")
+            return n->literal;
+        if (n->op == "floatatom")
+        {
+            if (n->literal.has_value())
+                return n->literal;
+            for (const auto& e : g.edges)
+            {
+                if (e.toNodeId != n->id || e.toPort != 0)
+                    continue;
+                const auto* src = g.findNode(e.fromNodeId);
+                if (src != nullptr && src->op == "constant" && src->literal.has_value())
+                    return src->literal;
+            }
+        }
+        return std::nullopt;
+    };
+    for (const auto& [bindingName, nodeId] : currentGraph.bindings)
+    {
+        const auto v = bindingNumericValue(result.graph, bindingName);
+        if (!v.has_value())
+            continue;
+        if (auto* dst = currentGraph.findNode(nodeId); dst != nullptr)
+        {
+            if (dst->op == "floatatom" || dst->op == "constant")
+            {
+                dst->literal = v;
+                std::ostringstream s;
+                s << *v;
+                dst->label = s.str();
+            }
+        }
+    }
+
+    // Normalize floatatom stored values from text representation:
+    // - floatatom(<number>) is compiled as constant -> floatatom
+    // - some forms may keep number in label text
+    // Mirror whichever is present into literal so number boxes and runtime state stay in sync.
+    for (auto& node : currentGraph.nodes)
+    {
+        if (node.op != "floatatom")
+            continue;
+        std::optional<double> inferred = node.literal;
+        for (const auto& e : currentGraph.edges)
+        {
+            if (e.toNodeId != node.id || e.toPort != 0)
+                continue;
+            const auto* src = currentGraph.findNode(e.fromNodeId);
+            if (src != nullptr && src->op == "constant" && src->literal.has_value())
+            {
+                inferred = src->literal;
+                break;
+            }
+        }
+        if (!inferred.has_value())
+        {
+            std::istringstream iss(node.label);
+            std::string tok;
+            while (iss >> tok)
+            {
+                char* end = nullptr;
+                const auto v = std::strtod(tok.c_str(), &end);
+                if (end != tok.c_str() && end != nullptr && *end == '\0')
+                    inferred = v;
+            }
+            if (!inferred.has_value())
+            {
+                char* end = nullptr;
+                const auto v = std::strtod(node.label.c_str(), &end);
+                if (end != node.label.c_str() && end != nullptr && *end == '\0')
+                    inferred = v;
+            }
+        }
+        if (inferred.has_value())
+        {
+            node.literal = inferred;
+            std::ostringstream s;
+            s << *inferred;
+            node.label = s.str();
+        }
+    }
 
     // Keep explicit DAC routing visible in the code pane even for text-first workflows.
     auto stripDacRoutingBlock = [](std::string text)
@@ -1215,10 +1933,10 @@ void MainComponent::compileFromText()
             text.erase(pos);
         return text;
     };
-    auto collectDacRoutingLines = [](const duodsp::ir::Graph& g)
+    auto collectDacRoutingLines = [this](const duodsp::ir::Graph& g)
     {
         std::vector<std::string> lines;
-        std::istringstream iss(duodsp::text::prettyPrint(g));
+        std::istringstream iss(duodsp::text::prettyPrint(g, codeViewVerbose));
         std::string line;
         while (std::getline(iss, line))
         {
@@ -1242,6 +1960,42 @@ void MainComponent::compileFromText()
             setCodeContent(juce::String(base), false);
     }
 
+    std::unordered_set<std::string> usedOldIds;
+    for (const auto& node : currentGraph.nodes)
+    {
+        if (nodeLayout.contains(node.id))
+            usedOldIds.insert(node.id);
+    }
+
+    auto equalLiterals = [](const std::optional<double>& a, const std::optional<double>& b)
+    {
+        if (!a.has_value() && !b.has_value())
+            return true;
+        if (a.has_value() != b.has_value())
+            return false;
+        return std::abs(*a - *b) < 1.0e-9;
+    };
+
+    // Fallback remap for layout stability when node IDs cannot be preserved.
+    for (const auto& node : currentGraph.nodes)
+    {
+        if (nodeLayout.contains(node.id))
+            continue;
+        for (const auto& oldNode : previousGraphSnapshot.nodes)
+        {
+            if (usedOldIds.contains(oldNode.id))
+                continue;
+            if (oldNode.op != node.op || oldNode.label != node.label || !equalLiterals(oldNode.literal, node.literal))
+                continue;
+            if (const auto it = nodeLayout.find(oldNode.id); it != nodeLayout.end())
+            {
+                nodeLayout[node.id] = it->second;
+                usedOldIds.insert(oldNode.id);
+                break;
+            }
+        }
+    }
+
     for (const auto& node : currentGraph.nodes)
     {
         if (!nodeLayout.contains(node.id))
@@ -1256,6 +2010,23 @@ void MainComponent::compileFromText()
             it = nodeLayout.erase(it);
         else
             ++it;
+    }
+
+    // Transaction guard: if committed graph is invalid, rollback immediately.
+    const auto postIssues = duodsp::ir::validateGraph(currentGraph);
+    if (!postIssues.empty())
+    {
+        currentGraph = previousGraphSnapshot;
+        currentSyncMap = previousSyncSnapshot;
+        nodeLayout = previousLayoutSnapshot;
+        syncCanvasFromGraph();
+        runtime.setGraph(currentGraph);
+        refreshProbeSelectors();
+        statusLabel.setText("Apply rolled back: " + juce::String(postIssues.front().message), juce::dontSendNotification);
+        statusLabel.setColour(juce::Label::textColourId, juce::Colours::red);
+        hasUnappliedCodeEdits = true;
+        refreshCodeApplyUi();
+        return;
     }
 
     syncCanvasFromGraph();
@@ -1288,18 +2059,19 @@ void MainComponent::compileFromText()
 
     pendingEditOrigin = EditOrigin::none;
     textEditedSinceLastCompile = false;
-
-    if (result.diagnostics.empty())
+    hasUnappliedCodeEdits = false;
+    autoApplySawStatementBoundary = false;
+    autoApplyPreflightSnapshotTaken = false;
+    lastAppliedCodeText = codeDocument.getAllContent().toStdString();
+    lastKnownFloatatomValues.clear();
+    for (const auto& n : currentGraph.nodes)
     {
-        statusLabel.setText("Compiled", juce::dontSendNotification);
-        statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+        if (n.op == "floatatom")
+            lastKnownFloatatomValues[n.id] = static_cast<float>(n.literal.value_or(0.0));
     }
-    else
-    {
-        statusLabel.setText("Compile issues: " + juce::String(static_cast<int>(result.diagnostics.size())) + " (" + juce::String(result.diagnostics.front().message) + ")",
-                            juce::dontSendNotification);
-        statusLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
-    }
+    refreshCodeApplyUi();
+    statusLabel.setText(usedSafeParamTransplant ? "Compiled (safe param apply)" : "Compiled", juce::dontSendNotification);
+    statusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
 }
 
 void MainComponent::syncCanvasFromGraph()

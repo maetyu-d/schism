@@ -534,10 +534,22 @@ std::string canonicalOpFromCallName(const std::string& name)
         return "bpf";
     if (name == "svf~")
         return "svf";
+    if (name == "freeverb~")
+        return "freeverb";
+    if (name == "plate~")
+        return "plate";
+    if (name == "reverb~")
+        return "reverb";
+    if (name == "fdn~")
+        return "fdn";
+    if (name == "convrev~")
+        return "convrev";
     if (name == "delay~")
         return "delay";
     if (name == "delay")
         return "cdelay";
+    if (name == "metro")
+        return "metro";
     if (name == "apf~")
         return "apf";
     if (name == "comb~")
@@ -566,6 +578,34 @@ std::string canonicalOpFromCallName(const std::string& name)
         return "slew";
     if (name == "sah~")
         return "sah";
+    if (name == "sah")
+        return "sah_c";
+    if (name == "line")
+        return "line";
+    if (name == "line~")
+        return "line_sig";
+    if (name == "vline~")
+        return "vline";
+    if (name == "ad~")
+        return "ad";
+    if (name == "toggle")
+        return "toggle";
+    if (name == "select")
+        return "select";
+    if (name == "trigger" || name == "t")
+        return "trigger";
+    if (name == "pack")
+        return "pack";
+    if (name == "unpack")
+        return "unpack";
+    if (name == "snapshot~")
+        return "snapshot";
+    if (name == "pan~")
+        return "pan";
+    if (name == "env~")
+        return "env";
+    if (name == "peak~")
+        return "peak";
     if (name == "mtof~")
         return "mtof_sig";
     if (name == "pow~")
@@ -595,10 +635,22 @@ std::string displayCallNameFromOp(const std::string& op)
         return "bpf~";
     if (op == "svf")
         return "svf~";
+    if (op == "freeverb")
+        return "freeverb~";
+    if (op == "plate")
+        return "plate~";
+    if (op == "reverb")
+        return "reverb~";
+    if (op == "fdn")
+        return "fdn~";
+    if (op == "convrev")
+        return "convrev~";
     if (op == "delay")
         return "delay~";
     if (op == "cdelay")
         return "delay";
+    if (op == "metro")
+        return "metro";
     if (op == "apf")
         return "apf~";
     if (op == "comb")
@@ -627,6 +679,34 @@ std::string displayCallNameFromOp(const std::string& op)
         return "slew~";
     if (op == "sah")
         return "sah~";
+    if (op == "sah_c")
+        return "sah";
+    if (op == "line")
+        return "line";
+    if (op == "line_sig")
+        return "line~";
+    if (op == "vline")
+        return "vline~";
+    if (op == "ad")
+        return "ad~";
+    if (op == "toggle")
+        return "toggle";
+    if (op == "select")
+        return "select";
+    if (op == "trigger")
+        return "trigger";
+    if (op == "pack")
+        return "pack";
+    if (op == "unpack")
+        return "unpack";
+    if (op == "snapshot")
+        return "snapshot~";
+    if (op == "pan")
+        return "pan~";
+    if (op == "env")
+        return "env~";
+    if (op == "peak")
+        return "peak~";
     if (op == "mtof_sig")
         return "mtof~";
     if (op == "pow")
@@ -670,6 +750,23 @@ std::string formatDefaultNumber(const double v)
     std::ostringstream s;
     s << v;
     return s.str();
+}
+
+std::string callLabelWithNumericArgs(const Expr& callExpr)
+{
+    std::string label = callExpr.text;
+    for (const auto& argPtr : callExpr.args)
+    {
+        if (argPtr == nullptr)
+            continue;
+        const auto& arg = *argPtr;
+        if (arg.kind == ExprKind::number)
+        {
+            label += " ";
+            label += arg.text;
+        }
+    }
+    return label;
 }
 
 std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl)
@@ -716,7 +813,7 @@ std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl
         case ExprKind::call:
         {
             const auto op = canonicalOpFromCallName(expr.text);
-            const auto id = ctx.addNode(op, expr.text, expr.start, expr.end);
+            const auto id = ctx.addNode(op, callLabelWithNumericArgs(expr), expr.start, expr.end);
             for (int i = 0; i < static_cast<int>(expr.args.size()); ++i)
             {
                 const auto arg = compileExpr(ctx, *expr.args[static_cast<size_t>(i)], forceControl);
@@ -734,7 +831,7 @@ std::string compileExpr(CompileContext& ctx, const Expr& expr, bool forceControl
                 return source;
             }
             const auto op = canonicalOpFromCallName(rhs.text);
-            const auto id = ctx.addNode(op, rhs.text, expr.start, expr.end);
+            const auto id = ctx.addNode(op, callLabelWithNumericArgs(rhs), expr.start, expr.end);
             ctx.connect(source, id, 0);
             for (int i = 0; i < static_cast<int>(rhs.args.size()); ++i)
             {
@@ -870,6 +967,16 @@ std::string exprForNodeImpl(const ir::Graph& graph,
         return defaultForPort(port);
     };
 
+    if (node->op == "msg")
+    {
+        auto stored = defaultForPort(0);
+        if (stored.empty())
+            stored = "0";
+        memo[nodeId] = "msg(" + stored + ")";
+        inFlight.erase(nodeId);
+        return memo[nodeId];
+    }
+
     if ((node->op == "add" || node->op == "sub" || node->op == "mul" || node->op == "div") && (!argAt(0).empty() || !argAt(1).empty()))
     {
         auto a = argAt(0);
@@ -910,6 +1017,64 @@ std::string exprForNode(const ir::Graph& graph, const std::string& nodeId, std::
 {
     std::unordered_set<std::string> inFlight;
     return exprForNodeImpl(graph, nodeId, memo, inFlight);
+}
+
+bool isAutoBindingName(const std::string& name)
+{
+    if (name.size() < 2 || name[0] != 'n')
+        return false;
+    for (size_t i = 1; i < name.size(); ++i)
+        if (!std::isdigit(static_cast<unsigned char>(name[i])))
+            return false;
+    return true;
+}
+
+std::string opAliasBase(const std::string& op)
+{
+    if (op == "sin")
+        return "osc";
+    if (op == "saw")
+        return "phasor";
+    if (op == "tri")
+        return "tri";
+    if (op == "noise")
+        return "noise";
+    if (op == "bang")
+        return "bang";
+    if (op == "msg")
+        return "msg";
+    if (op == "floatatom")
+        return "num";
+    if (op == "out")
+        return "dac";
+    if (op == "mtof")
+        return "mtof";
+    if (op == "mtof_sig")
+        return "mtofsig";
+    return displayCallNameFromOp(op);
+}
+
+std::string compactIdentifier(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (const auto c : s)
+    {
+        if (std::isalnum(static_cast<unsigned char>(c)))
+            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (out.empty())
+        out = "node";
+    return out;
+}
+
+bool envVerbose()
+{
+    const auto* v = std::getenv("SCHISM_CODE_VERBOSE");
+    if (v == nullptr)
+        return false;
+    const std::string s(v);
+    return s == "1" || s == "true" || s == "TRUE" || s == "yes" || s == "YES";
 }
 
 std::string structureSignature(const ir::Graph& graph,
@@ -1047,6 +1212,11 @@ CompileResult compile(const std::string& source, const ir::Graph* previousGraph)
 
 std::string prettyPrint(const ir::Graph& graph)
 {
+    return prettyPrint(graph, envVerbose());
+}
+
+std::string prettyPrint(const ir::Graph& graph, const bool verbose)
+{
     std::ostringstream out;
 
     std::vector<std::pair<std::string, std::string>> bindings;
@@ -1064,16 +1234,6 @@ std::string prettyPrint(const ir::Graph& graph)
                   return a.first < b.first;
               });
 
-    auto isAutoBindingName = [](const std::string& name)
-    {
-        if (name.size() < 2 || name[0] != 'n')
-            return false;
-        for (size_t i = 1; i < name.size(); ++i)
-            if (!std::isdigit(static_cast<unsigned char>(name[i])))
-                return false;
-        return true;
-    };
-
     std::unordered_set<std::string> boundIds;
     for (const auto& [name, nodeId] : bindings)
         boundIds.insert(nodeId);
@@ -1088,13 +1248,14 @@ std::string prettyPrint(const ir::Graph& graph)
 
     std::unordered_map<std::string, std::string> memo;
     std::unordered_map<std::string, std::string> emittedBindingByNodeId;
+    std::vector<std::pair<std::string, std::string>> emittedBindings;
     bool emittedAnyBinding = false;
     for (const auto& [name, nodeId] : bindings)
     {
         if (isAutoBindingName(name) && feedsAnotherBoundNode(nodeId))
             continue;
-        out << name << " = " << exprForNode(graph, nodeId, memo) << ";\n";
         emittedBindingByNodeId[nodeId] = name;
+        emittedBindings.push_back({ name, nodeId });
         emittedAnyBinding = true;
     }
 
@@ -1102,8 +1263,8 @@ std::string prettyPrint(const ir::Graph& graph)
     if (!emittedAnyBinding && !bindings.empty())
     {
         const auto& [name, nodeId] = bindings.back();
-        out << name << " = " << exprForNode(graph, nodeId, memo) << ";\n";
         emittedBindingByNodeId[nodeId] = name;
+        emittedBindings.push_back({ name, nodeId });
     }
 
     auto refForNode = [&](const std::string& nodeId)
@@ -1112,6 +1273,82 @@ std::string prettyPrint(const ir::Graph& graph)
             return emittedBindingByNodeId.at(nodeId);
         return exprForNode(graph, nodeId, memo);
     };
+
+    auto triggerSourceFor = [&](const std::string& nodeId) -> std::string
+    {
+        const auto* n = graph.findNode(nodeId);
+        if (n == nullptr)
+            return {};
+        if (!(n->op == "msg" || n->op == "random" || n->op == "bang" || n->op == "cdelay" || n->op == "metro"))
+            return {};
+        for (const auto& e : graph.edges)
+            if (e.toNodeId == nodeId && e.toPort == 0)
+                return refForNode(e.fromNodeId);
+        return {};
+    };
+
+    enum class LineClass
+    {
+        event,
+        control,
+        audio
+    };
+
+    auto classify = [&](const ir::Node& n) -> LineClass
+    {
+        if (n.op == "bang" || n.op == "msg" || n.op == "random" || n.op == "cdelay" || n.op == "metro")
+            return LineClass::event;
+        const auto rate = ir::opSpecFor(n.op).outputRate;
+        return rate == ir::PortRate::control ? LineClass::control : LineClass::audio;
+    };
+
+    std::unordered_map<std::string, int> aliasCounters;
+    std::vector<std::string> eventLines;
+    std::vector<std::string> controlLines;
+    std::vector<std::string> audioLines;
+    for (const auto& [name, nodeId] : emittedBindings)
+    {
+        const auto* n = graph.findNode(nodeId);
+        if (n == nullptr)
+            continue;
+
+        std::string line = name + " = " + exprForNode(graph, nodeId, memo) + ";";
+        if (verbose && isAutoBindingName(name))
+        {
+            auto base = compactIdentifier(opAliasBase(n->op));
+            auto& idx = aliasCounters[base];
+            ++idx;
+            line += " // alias: " + base + std::to_string(idx);
+        }
+        const auto trigSrc = triggerSourceFor(nodeId);
+        if (!trigSrc.empty())
+            line += " // trig <- " + trigSrc;
+        if (verbose)
+            line += " // nodeId: " + nodeId;
+
+        const auto cls = classify(*n);
+        if (cls == LineClass::event)
+            eventLines.push_back(line);
+        else if (cls == LineClass::control)
+            controlLines.push_back(line);
+        else
+            audioLines.push_back(line);
+    }
+
+    auto writeSection = [&](const std::string& title, const std::vector<std::string>& lines)
+    {
+        if (lines.empty())
+            return;
+        out << "// " << title << "\n";
+        for (const auto& l : lines)
+            out << l << "\n";
+        out << "\n";
+    };
+
+    writeSection("EVENT / CLOCK", eventLines);
+    writeSection("CONTROL", controlLines);
+    writeSection("AUDIO", audioLines);
+    out << "// OUTPUT\n";
 
     for (const auto& n : graph.nodes)
     {

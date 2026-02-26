@@ -504,6 +504,311 @@ void testMessageSetsFloatatom()
     require(std::abs(buffer.getSample(0, 63) - 72.0f) < 0.01f, "bang->msg->floatatom chain should output 72.");
 }
 
+void testToggleFlipFlopOnBang()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    g.nodes.push_back({ "t", "toggle", "toggle", std::nullopt });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "b", "t", 0 });
+    g.edges.push_back({ "t", "out", 0 });
+    g.edges.push_back({ "t", "out", 1 });
+    engine.setGraph(g);
+
+    juce::AudioBuffer<float> buffer(2, 64);
+    engine.triggerBang("b");
+    engine.processBlock(buffer);
+    require(buffer.getSample(0, 63) > 0.5f, "toggle should turn on (1) on first bang.");
+
+    engine.triggerBang("b");
+    engine.processBlock(buffer);
+    require(buffer.getSample(0, 63) < 0.5f, "toggle should turn off (0) on second bang.");
+}
+
+void testFloatatomValuesBeforeProcess()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "f", "floatatom", "72", 72.0 });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "f", "out", 0 });
+    g.edges.push_back({ "f", "out", 1 });
+    engine.setGraph(g);
+
+    const auto values = engine.getFloatatomValues();
+    require(values.contains("f"), "floatatom values should include floatatom node id.");
+    require(std::abs(values.at("f") - 72.0f) < 0.01f, "floatatom value should reflect stored literal before processing.");
+}
+
+void testFloatatomLiteralUpdateSurvivesStateTransfer()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 64, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph gA;
+    gA.nodes.push_back({ "f", "floatatom", "10", 10.0 });
+    gA.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    gA.edges.push_back({ "f", "out", 0 });
+    gA.edges.push_back({ "f", "out", 1 });
+    engine.setGraph(gA);
+
+    duodsp::ir::Graph gB = gA;
+    if (auto* n = gB.findNode("f"); n != nullptr)
+    {
+        n->label = "72";
+        n->literal = 72.0;
+    }
+    engine.setGraph(gB);
+
+    const auto values = engine.getFloatatomValues();
+    require(values.contains("f"), "floatatom values should include updated floatatom id.");
+    require(std::abs(values.at("f") - 72.0f) < 0.01f, "floatatom display/runtime value should follow edited literal after graph update.");
+}
+
+void testToggleControlsMetroStartStop()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 1024, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    g.nodes.push_back({ "t", "toggle", "toggle", std::nullopt });
+    g.nodes.push_back({ "m", "metro", "metro 10", std::nullopt });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "b", "t", 0 });
+    g.edges.push_back({ "t", "m", 0 });
+    g.edges.push_back({ "m", "out", 0 });
+    g.edges.push_back({ "m", "out", 1 });
+    engine.setGraph(g);
+
+    juce::AudioBuffer<float> buffer(2, 1024);
+
+    engine.triggerBang("b"); // toggle -> 1, metro running
+    engine.processBlock(buffer);
+    int pulsesOn = 0;
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+        if (buffer.getSample(0, i) > 0.5f)
+            ++pulsesOn;
+    require(pulsesOn >= 2, "toggle=1 should drive metro to emit pulses.");
+
+    engine.triggerBang("b"); // toggle -> 0, metro stopped
+    engine.processBlock(buffer);
+    int pulsesOff = 0;
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+        if (buffer.getSample(0, i) > 0.5f)
+            ++pulsesOff;
+    require(pulsesOff == 0, "toggle=0 should stop metro.");
+}
+
+void testMetroNode()
+{
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 1024, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    duodsp::ir::Graph g;
+    g.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+    g.nodes.push_back({ "m", "metro", "metro 10", std::nullopt });
+    g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+    g.edges.push_back({ "b", "m", 0 });
+    g.edges.push_back({ "m", "out", 0 });
+    g.edges.push_back({ "m", "out", 1 });
+    engine.setGraph(g);
+
+    engine.triggerBang("b");
+    juce::AudioBuffer<float> buffer(2, 1024);
+    engine.processBlock(buffer);
+    int pulses = 0;
+    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    {
+        if (buffer.getSample(0, i) > 0.5f)
+            ++pulses;
+    }
+    require(pulses >= 2, "metro should emit periodic control pulses after start trigger. pulses=" + std::to_string(pulses));
+}
+
+void testMetroRateInlet()
+{
+    auto countPulsesForRateMs = [](const double rateMs)
+    {
+        duodsp::dsp::RuntimeEngine engine;
+        engine.prepare(48000.0, 1024, 2);
+        engine.setCrossfadeTimeMs(0.0);
+
+        duodsp::ir::Graph g;
+        g.nodes.push_back({ "b", "bang", "bang", std::nullopt });
+        g.nodes.push_back({ "r", "floatatom", std::to_string(rateMs), rateMs });
+        g.nodes.push_back({ "m", "metro", "metro 250", std::nullopt });
+        g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+        g.edges.push_back({ "b", "m", 0 });
+        g.edges.push_back({ "r", "m", 1 }); // right inlet: interval in ms
+        g.edges.push_back({ "m", "out", 0 });
+        g.edges.push_back({ "m", "out", 1 });
+        engine.setGraph(g);
+
+        engine.triggerBang("b");
+        juce::AudioBuffer<float> buffer(2, 1024);
+        engine.processBlock(buffer);
+
+        int pulses = 0;
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            if (buffer.getSample(0, i) > 0.5f)
+                ++pulses;
+        }
+        return pulses;
+    };
+
+    const auto fastPulses = countPulsesForRateMs(10.0);
+    const auto slowPulses = countPulsesForRateMs(1000.0);
+    require(fastPulses > slowPulses,
+            "metro right inlet should set pulse interval from connected number. fast=" + std::to_string(fastPulses)
+                + " slow=" + std::to_string(slowPulses));
+}
+
+void testTempoEditUpdatesMetroRate()
+{
+    const std::string srcFast =
+        "tempo = floatatom(50);\n"
+        "m = metro(1, tempo);\n"
+        "dac~(m, m);\n";
+    const auto fast = duodsp::text::compile(srcFast, nullptr);
+    require(fast.diagnostics.empty(), "tempo-fast source should compile.");
+
+    const std::string srcSlow =
+        "tempo = floatatom(500);\n"
+        "m = metro(1, tempo);\n"
+        "dac~(m, m);\n";
+    const auto slow = duodsp::text::compile(srcSlow, &fast.graph);
+    require(slow.diagnostics.empty(), "tempo-slow source should compile.");
+
+    duodsp::dsp::RuntimeEngine engine;
+    engine.prepare(48000.0, 1024, 2);
+    engine.setCrossfadeTimeMs(0.0);
+
+    auto pulseCount = [&](const duodsp::ir::Graph& g)
+    {
+        engine.setGraph(g);
+        juce::AudioBuffer<float> buffer(2, 1024);
+        engine.processBlock(buffer);
+        int pulses = 0;
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            if (buffer.getSample(0, i) > 0.5f)
+                ++pulses;
+        }
+        return pulses;
+    };
+
+    const auto pulsesFast = pulseCount(fast.graph);
+    const auto pulsesSlow = pulseCount(slow.graph);
+    require(pulsesFast > pulsesSlow, "tempo edit 50->500 should reduce metro pulse rate.");
+}
+
+void testRandomBoundEditUpdatesLabelAndRuntime()
+{
+    const std::string srcLo =
+        "m = metro(1, 5);\n"
+        "r = random(m, 0, 100);\n"
+        "dac~(r, r);\n";
+    const auto lo = duodsp::text::compile(srcLo, nullptr);
+    require(lo.diagnostics.empty(), "random-low source should compile.");
+
+    const std::string srcHi =
+        "m = metro(1, 5);\n"
+        "r = random(m, 0, 500);\n"
+        "dac~(r, r);\n";
+    const auto hi = duodsp::text::compile(srcHi, &lo.graph);
+    require(hi.diagnostics.empty(), "random-high source should compile.");
+
+    const auto* nLo = lo.graph.findNode(lo.graph.bindings.at("r"));
+    const auto* nHi = hi.graph.findNode(hi.graph.bindings.at("r"));
+    require(nLo != nullptr && nLo->op == "random", "binding r should map to random in low graph.");
+    require(nHi != nullptr && nHi->op == "random", "binding r should map to random in high graph.");
+    require(nLo->label.find("100") != std::string::npos, "random low label should include upper bound 100.");
+    require(nHi->label.find("500") != std::string::npos, "random high label should include upper bound 500.");
+
+    auto maxOutForGraph = [](const duodsp::ir::Graph& g)
+    {
+        duodsp::dsp::RuntimeEngine engine;
+        engine.prepare(48000.0, 1024, 2);
+        engine.setCrossfadeTimeMs(0.0);
+        engine.setGraph(g);
+        juce::AudioBuffer<float> buffer(2, 1024);
+        float maxV = 0.0f;
+        for (int b = 0; b < 6; ++b)
+        {
+            engine.processBlock(buffer);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                maxV = juce::jmax(maxV, buffer.getSample(0, i));
+        }
+        return maxV;
+    };
+
+    const auto loMax = maxOutForGraph(lo.graph);
+    const auto hiMax = maxOutForGraph(hi.graph);
+    require(hiMax > loMax + 120.0f, "random upper-bound edit 100->500 should increase produced range significantly.");
+}
+
+void testReverbRuntimeStability()
+{
+    auto runImpulse = [](const std::string& op, const std::string& label)
+    {
+        duodsp::dsp::RuntimeEngine engine;
+        engine.prepare(48000.0, 1024, 2);
+        engine.setCrossfadeTimeMs(0.0);
+
+        duodsp::ir::Graph g;
+        g.nodes.push_back({ "imp", "constant", "1", 1.0 });
+        g.nodes.push_back({ "rv", op, label, std::nullopt });
+        g.nodes.push_back({ "out", "out", "dac~", std::nullopt });
+        g.edges.push_back({ "imp", "rv", 0 });
+        g.edges.push_back({ "rv", "out", 0 });
+        g.edges.push_back({ "rv", "out", 1 });
+        engine.setGraph(g);
+
+        juce::AudioBuffer<float> buffer(2, 1024);
+        float energy = 0.0f;
+        bool finite = true;
+        for (int block = 0; block < 8; ++block)
+        {
+            engine.processBlock(buffer);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                const auto s = buffer.getSample(0, i);
+                if (!std::isfinite(s))
+                    finite = false;
+                energy += std::abs(s);
+            }
+            // impulse only on first block
+            if (block == 0)
+            {
+                if (auto* imp = g.findNode("imp"); imp != nullptr)
+                    imp->literal = 0.0;
+                engine.setGraph(g);
+            }
+        }
+
+        require(finite, op + " produced non-finite output.");
+        require(energy > 1.0f, op + " produced no meaningful output energy.");
+    };
+
+    runImpulse("freeverb", "freeverb~ 0.75 0.3 1 0.5");
+    runImpulse("plate", "plate~ 0.7 0.3 0.5");
+    runImpulse("reverb", "reverb~ 0.7 0.3 0.5");
+    runImpulse("fdn", "fdn~ 0.7 0.3 0.5");
+    runImpulse("convrev", "convrev~ 0.6 0.5");
+}
+
 void testNewFilterDelayCodeRoundTrip()
 {
     const std::string source =
@@ -523,7 +828,27 @@ void testNewFilterDelayCodeRoundTrip()
         "lr = lores~(m2, 900, 0.4);\n"
         "ar = abs~(lr);\n"
         "rv = random(1, 3);\n"
+        "mc = metro(1, 10);\n"
+        "sh = sah(1, mc);\n"
+        "ln = line(sh, 50);\n"
+        "ls = line~(ln, 50);\n"
+        "vl = vline~(ls, 25);\n"
+        "en = ad~(mc, 10, 120);\n"
+        "tg = toggle(mc);\n"
+        "sl = select(tg, 1);\n"
+        "tr = trigger(sl);\n"
+        "pk = pack(tr, 9);\n"
+        "up = unpack(pk);\n"
         "s = svf~(ar, 800, 0.7, 1);\n"
+        "sn = snapshot~(s);\n"
+        "pn = pan~(s, 0.5);\n"
+        "ev = env~(pn, 50);\n"
+        "pp = peak~(pn, 150);\n"
+        "fr = freeverb~(pn, 0.75, 0.3, 1, 0.2);\n"
+        "pl = plate~(fr, 0.7, 0.3, 0.2);\n"
+        "rv2 = reverb~(pl, 0.7, 0.3, 0.2);\n"
+        "fd = fdn~(rv2, 0.7, 0.3, 0.2);\n"
+        "cv = convrev~(fd, 0.5, 0.2);\n"
         "a = apf~(s, 5, 0.5);\n"
         "c = comb~(a, 10, 0.6);\n"
         "dac~(c, c);\n";
@@ -544,6 +869,26 @@ void testNewFilterDelayCodeRoundTrip()
     require(printed.find("abs~(") != std::string::npos, "Pretty print should include audio abs.");
     require(printed.find("abs(") != std::string::npos, "Pretty print should include control abs.");
     require(printed.find("random(") != std::string::npos, "Pretty print should include random.");
+    require(printed.find("metro(") != std::string::npos, "Pretty print should include metro.");
+    require(printed.find("sah(") != std::string::npos, "Pretty print should include control sah.");
+    require(printed.find("line(") != std::string::npos, "Pretty print should include line.");
+    require(printed.find("line~(") != std::string::npos, "Pretty print should include line~.");
+    require(printed.find("vline~(") != std::string::npos, "Pretty print should include vline~.");
+    require(printed.find("ad~(") != std::string::npos, "Pretty print should include ad~.");
+    require(printed.find("toggle(") != std::string::npos, "Pretty print should include toggle.");
+    require(printed.find("select(") != std::string::npos, "Pretty print should include select.");
+    require(printed.find("trigger(") != std::string::npos, "Pretty print should include trigger.");
+    require(printed.find("pack(") != std::string::npos, "Pretty print should include pack.");
+    require(printed.find("unpack(") != std::string::npos, "Pretty print should include unpack.");
+    require(printed.find("snapshot~(") != std::string::npos, "Pretty print should include snapshot~.");
+    require(printed.find("pan~(") != std::string::npos, "Pretty print should include pan~.");
+    require(printed.find("env~(") != std::string::npos, "Pretty print should include env~.");
+    require(printed.find("peak~(") != std::string::npos, "Pretty print should include peak~.");
+    require(printed.find("freeverb~(") != std::string::npos, "Pretty print should include freeverb~.");
+    require(printed.find("plate~(") != std::string::npos, "Pretty print should include plate~.");
+    require(printed.find("reverb~(") != std::string::npos, "Pretty print should include reverb~.");
+    require(printed.find("fdn~(") != std::string::npos, "Pretty print should include fdn~.");
+    require(printed.find("convrev~(") != std::string::npos, "Pretty print should include convrev~.");
     require(printed.find("bpf~(") != std::string::npos, "Pretty print should include bpf~.");
     require(printed.find("lores~(") != std::string::npos, "Pretty print should include lores~.");
     require(printed.find("svf~(") != std::string::npos, "Pretty print should include svf~.");
@@ -608,6 +953,26 @@ void testCodeViewDisplaysNodeParameters()
     expectContains("x = min~(1, 0.5);\ndac~(x, x);\n", "min~(1, 0.5)", "min~");
     expectContains("x = max~(1, 0.5);\ndac~(x, x);\n", "max~(1, 0.5)", "max~");
     expectContains("x = random(1, 2, 4);\ndac~(x, x);\n", "random(1, 2, 4)", "random");
+    expectContains("x = metro(1, 250);\ndac~(x, x);\n", "metro(1, 250)", "metro");
+    expectContains("x = sah(1, 1);\ndac~(x, x);\n", "sah(1, 1)", "sah");
+    expectContains("x = line(1, 50);\ndac~(x, x);\n", "line(1, 50)", "line");
+    expectContains("x = line~(1, 50);\ndac~(x, x);\n", "line~(1, 50)", "line~");
+    expectContains("x = vline~(1, 50);\ndac~(x, x);\n", "vline~(1, 50)", "vline~");
+    expectContains("x = ad~(1, 10, 120);\ndac~(x, x);\n", "ad~(1, 10, 120)", "ad~");
+    expectContains("x = toggle(1);\ndac~(x, x);\n", "toggle(1)", "toggle");
+    expectContains("x = select(1, 1);\ndac~(x, x);\n", "select(1, 1)", "select");
+    expectContains("x = trigger(1);\ndac~(x, x);\n", "trigger(1)", "trigger");
+    expectContains("x = pack(1, 2);\ndac~(x, x);\n", "pack(1, 2)", "pack");
+    expectContains("x = unpack(1);\ndac~(x, x);\n", "unpack(1)", "unpack");
+    expectContains("x = snapshot~(1);\ndac~(x, x);\n", "snapshot~(1)", "snapshot~");
+    expectContains("x = pan~(1, 0.5);\ndac~(x, x);\n", "pan~(1, 0.5)", "pan~");
+    expectContains("x = env~(1, 50);\ndac~(x, x);\n", "env~(1, 50)", "env~");
+    expectContains("x = peak~(1, 150);\ndac~(x, x);\n", "peak~(1, 150)", "peak~");
+    expectContains("x = freeverb~(1, 0.75, 0.3, 1, 0.2);\ndac~(x, x);\n", "freeverb~(1, 0.75, 0.3, 1, 0.2)", "freeverb~");
+    expectContains("x = plate~(1, 0.7, 0.3, 0.2);\ndac~(x, x);\n", "plate~(1, 0.7, 0.3, 0.2)", "plate~");
+    expectContains("x = reverb~(1, 0.7, 0.3, 0.2);\ndac~(x, x);\n", "reverb~(1, 0.7, 0.3, 0.2)", "reverb~");
+    expectContains("x = fdn~(1, 0.7, 0.3, 0.2);\ndac~(x, x);\n", "fdn~(1, 0.7, 0.3, 0.2)", "fdn~");
+    expectContains("x = convrev~(1, 0.5, 0.2);\ndac~(x, x);\n", "convrev~(1, 0.5, 0.2)", "convrev~");
     expectContains("x = mtof~(69);\ndac~(x, x);\n", "mtof~(69)", "mtof~");
     expectContains("x = mtof(69);\ndac~(x, x);\n", "mtof(69)", "mtof");
     expectContains("x = abs~(0.5);\ndac~(x, x);\n", "abs~(0.5)", "abs~");
@@ -690,6 +1055,15 @@ int main(int argc, char** argv)
         { "sample_hold", &testSampleAndHoldNode },
         { "bang_node", &testBangNode },
         { "msg_floatatom", &testMessageSetsFloatatom },
+        { "toggle_flipflop", &testToggleFlipFlopOnBang },
+        { "floatatom_values_before_process", &testFloatatomValuesBeforeProcess },
+        { "floatatom_literal_update", &testFloatatomLiteralUpdateSurvivesStateTransfer },
+        { "toggle_metro_start_stop", &testToggleControlsMetroStartStop },
+        { "metro_node", &testMetroNode },
+        { "metro_rate_inlet", &testMetroRateInlet },
+        { "tempo_edit_metro_rate", &testTempoEditUpdatesMetroRate },
+        { "random_bound_edit", &testRandomBoundEditUpdatesLabelAndRuntime },
+        { "reverb_runtime", &testReverbRuntimeStability },
         { "filter_delay_code", &testNewFilterDelayCodeRoundTrip },
         { "code_aliases", &testCodePanelUsesDisplayAliases },
         { "code_params", &testCodeViewDisplaysNodeParameters },

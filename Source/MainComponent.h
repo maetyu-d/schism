@@ -76,6 +76,8 @@ private:
 
     void timerCallback() override;
     void compileFromText();
+    void applyPendingCodeEdits();
+    void refreshCodeApplyUi();
     void setCodeContent(const juce::String& content, bool queueCompile = true);
     void applyGraphMutation(const std::function<void(duodsp::ir::Graph&)>& mutator, bool pushHistorySnapshot = true);
     void syncCanvasFromGraph();
@@ -106,6 +108,7 @@ private:
     SplitterBar splitter;
     juce::Label syncLabel;
     juce::Label statusLabel;
+    juce::TextButton applyCodeButton { "Apply Code" };
     juce::Label scopeLabel;
     juce::Label spectrumLabel;
     juce::ComboBox scopeProbeSelect;
@@ -124,6 +127,12 @@ private:
 
     bool compilePending = true;
     bool suppressEditorEvents = false;
+    bool codeViewVerbose = false;
+    bool autoApplyCodeEdits = false;
+    bool hasUnappliedCodeEdits = false;
+    bool strictTextApplySafety = true;
+    bool autoApplySawStatementBoundary = false;
+    bool autoApplyPreflightSnapshotTaken = false;
     bool isRestoringHistory = false;
     bool hasCommittedInitialSnapshot = false;
     bool textEditedSinceLastCompile = false;
@@ -160,4 +169,6 @@ private:
     std::unique_ptr<juce::FileChooser> activeSaveChooser;
     std::unique_ptr<juce::FileChooser> activeLoadChooser;
     juce::File currentPatchFile;
+    std::string lastAppliedCodeText;
+    std::unordered_map<std::string, float> lastKnownFloatatomValues;
 };

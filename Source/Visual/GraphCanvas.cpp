@@ -25,6 +25,8 @@ constexpr float cableHitRadiusPx = 6.0f;
 constexpr float canvasInset = 0.0f;
 constexpr float bangClickMaxTravelPx = 6.0f;
 constexpr float bangDragStartPx = 4.0f;
+constexpr float floatatomClickMaxTravelPx = 6.0f;
+constexpr float minPortSpacingPx = 20.0f;
 
 juce::Font pdFont(const float size)
 {
@@ -55,10 +57,22 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "bpf~ 1200 0.7";
     if (node.op == "svf")
         return "svf~ 1200 0.7 0";
+    if (node.op == "freeverb")
+        return "freeverb~ 0.75 0.3 1 0.2";
+    if (node.op == "plate")
+        return "plate~ 0.7 0.3 0.2";
+    if (node.op == "reverb")
+        return "reverb~ 0.7 0.3 0.2";
+    if (node.op == "fdn")
+        return "fdn~ 0.7 0.3 0.2";
+    if (node.op == "convrev")
+        return "convrev~ 0.5 0.2";
     if (node.op == "delay")
         return "delay~ 250";
     if (node.op == "cdelay")
         return "delay 250";
+    if (node.op == "metro")
+        return "metro 250";
     if (node.op == "apf")
         return "apf~ 20 0.5";
     if (node.op == "comb")
@@ -71,6 +85,34 @@ juce::String pdObjectTextForNode(const ir::Node& node)
         return "slew~ 50";
     if (node.op == "sah")
         return "sah~";
+    if (node.op == "sah_c")
+        return "sah";
+    if (node.op == "line")
+        return "line 50";
+    if (node.op == "line_sig")
+        return "line~ 50";
+    if (node.op == "vline")
+        return "vline~ 50";
+    if (node.op == "ad")
+        return "ad~ 10 120";
+    if (node.op == "toggle")
+        return "toggle";
+    if (node.op == "select")
+        return "select 1";
+    if (node.op == "trigger")
+        return "trigger";
+    if (node.op == "pack")
+        return "pack";
+    if (node.op == "unpack")
+        return "unpack";
+    if (node.op == "snapshot")
+        return "snapshot~";
+    if (node.op == "pan")
+        return "pan~ 0.5";
+    if (node.op == "env")
+        return "env~ 50";
+    if (node.op == "peak")
+        return "peak~ 150";
     if (node.op == "mtof")
         return "mtof";
     if (node.op == "mtof_sig")
@@ -172,10 +214,22 @@ juce::String canonicalPdHeadForOp(const std::string& op)
         return "bpf~";
     if (op == "svf")
         return "svf~";
+    if (op == "freeverb")
+        return "freeverb~";
+    if (op == "plate")
+        return "plate~";
+    if (op == "reverb")
+        return "reverb~";
+    if (op == "fdn")
+        return "fdn~";
+    if (op == "convrev")
+        return "convrev~";
     if (op == "delay")
         return "delay~";
     if (op == "cdelay")
         return "delay";
+    if (op == "metro")
+        return "metro";
     if (op == "apf")
         return "apf~";
     if (op == "comb")
@@ -188,6 +242,34 @@ juce::String canonicalPdHeadForOp(const std::string& op)
         return "slew~";
     if (op == "sah")
         return "sah~";
+    if (op == "sah_c")
+        return "sah";
+    if (op == "line")
+        return "line";
+    if (op == "line_sig")
+        return "line~";
+    if (op == "vline")
+        return "vline~";
+    if (op == "ad")
+        return "ad~";
+    if (op == "toggle")
+        return "toggle";
+    if (op == "select")
+        return "select";
+    if (op == "trigger")
+        return "trigger";
+    if (op == "pack")
+        return "pack";
+    if (op == "unpack")
+        return "unpack";
+    if (op == "snapshot")
+        return "snapshot~";
+    if (op == "pan")
+        return "pan~";
+    if (op == "env")
+        return "env~";
+    if (op == "peak")
+        return "peak~";
     if (op == "mtof")
         return "mtof";
     if (op == "mtof_sig")
@@ -316,11 +398,12 @@ void GraphCanvas::rebuildVisuals(const std::unordered_map<std::string, juce::Poi
         const auto isMessage = v.style == NodeStyle::message;
         const auto textScale = isMessage ? nonBangNodeScale * messageNodeScale : nonBangNodeScale;
         const auto hScale = isMessage ? messageNodeScale : 1.0f;
-        const auto w = v.style == NodeStyle::bang ? bangSize : juce::jmax(regularMinNodeWidth, textWidth * textScale);
+        const auto spec = ir::opSpecFor(v.node.op);
+        const auto minWidthForPorts = minPortSpacingPx * static_cast<float>(juce::jmax(3, static_cast<int>(spec.inputs.size()) + 1));
+        const auto w = v.style == NodeStyle::bang ? bangSize : juce::jmax(juce::jmax(regularMinNodeWidth, minWidthForPorts), textWidth * textScale);
         const auto h = v.style == NodeStyle::bang ? bangSize : regularNodeHeight * hScale;
         v.bounds = juce::Rectangle<float>(pos.x, pos.y, w, h);
 
-        const auto spec = ir::opSpecFor(v.node.op);
         for (int port = 0; port < static_cast<int>(spec.inputs.size()); ++port)
         {
             const auto& input = spec.inputs[static_cast<size_t>(port)];
@@ -881,6 +964,11 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
     filtersShapers.addItem(16, "bpf~");
     filtersShapers.addItem(17, "svf~");
     filtersShapers.addItem(40, "lores~");
+    filtersShapers.addItem(72, "freeverb~");
+    filtersShapers.addItem(73, "plate~");
+    filtersShapers.addItem(74, "reverb~");
+    filtersShapers.addItem(75, "fdn~");
+    filtersShapers.addItem(76, "convrev~");
     filtersShapers.addSeparator();
     filtersShapers.addItem(21, "clip~");
     filtersShapers.addItem(22, "tanh~");
@@ -889,9 +977,15 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
     juce::PopupMenu delayTime;
     delayTime.addItem(18, "delay~");
     delayTime.addItem(41, "delay");
+    delayTime.addItem(57, "metro");
     delayTime.addItem(19, "apf~");
     delayTime.addItem(20, "comb~");
     delayTime.addItem(24, "sah~");
+    delayTime.addItem(58, "sah");
+    delayTime.addItem(59, "line~");
+    delayTime.addItem(60, "line");
+    delayTime.addItem(61, "vline~");
+    delayTime.addItem(62, "ad~");
 
     juce::PopupMenu math;
     math.addItem(30, "+~");
@@ -927,10 +1021,19 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
     logic.addItem(49, "not");
     logic.addSeparator();
     logic.addItem(56, "random");
+    logic.addItem(63, "toggle");
+    logic.addItem(64, "select");
+    logic.addItem(65, "trigger");
+    logic.addItem(66, "pack");
+    logic.addItem(67, "unpack");
 
     juce::PopupMenu routingConv;
     routingConv.addItem(25, "mtof");
     routingConv.addItem(26, "mtof~");
+    routingConv.addItem(68, "snapshot~");
+    routingConv.addItem(69, "pan~");
+    routingConv.addItem(70, "env~");
+    routingConv.addItem(71, "peak~");
     routingConv.addItem(29, "dac~");
 
     put.addSubMenu("Create", create);
@@ -973,6 +1076,16 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                               safeThis->onAddNodeRequested("bpf", p);
                           else if (res == 17)
                               safeThis->onAddNodeRequested("svf", p);
+                          else if (res == 72)
+                              safeThis->onAddNodeRequested("freeverb", p);
+                          else if (res == 73)
+                              safeThis->onAddNodeRequested("plate", p);
+                          else if (res == 74)
+                              safeThis->onAddNodeRequested("reverb", p);
+                          else if (res == 75)
+                              safeThis->onAddNodeRequested("fdn", p);
+                          else if (res == 76)
+                              safeThis->onAddNodeRequested("convrev", p);
                           else if (res == 18)
                               safeThis->onAddNodeRequested("delay", p);
                           else if (res == 19)
@@ -987,6 +1100,16 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                               safeThis->onAddNodeRequested("slew", p);
                           else if (res == 24)
                               safeThis->onAddNodeRequested("sah", p);
+                          else if (res == 58)
+                              safeThis->onAddNodeRequested("sah_c", p);
+                          else if (res == 59)
+                              safeThis->onAddNodeRequested("line_sig", p);
+                          else if (res == 60)
+                              safeThis->onAddNodeRequested("line", p);
+                          else if (res == 61)
+                              safeThis->onAddNodeRequested("vline", p);
+                          else if (res == 62)
+                              safeThis->onAddNodeRequested("ad", p);
                           else if (res == 25)
                               safeThis->onAddNodeRequested("mtof", p);
                           else if (res == 26)
@@ -1021,6 +1144,8 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                               safeThis->onAddNodeRequested("lores", p);
                           else if (res == 41)
                               safeThis->onAddNodeRequested("cdelay", p);
+                          else if (res == 57)
+                              safeThis->onAddNodeRequested("metro", p);
                           else if (res == 42)
                               safeThis->onAddNodeRequested("and_sig", p);
                           else if (res == 43)
@@ -1051,6 +1176,24 @@ void GraphCanvas::showPutPopup(const juce::Point<float> screenPos)
                               safeThis->onAddNodeRequested("abs", p);
                           else if (res == 56)
                               safeThis->onAddNodeRequested("random", p);
+                          else if (res == 63)
+                              safeThis->onAddNodeRequested("toggle", p);
+                          else if (res == 64)
+                              safeThis->onAddNodeRequested("select", p);
+                          else if (res == 65)
+                              safeThis->onAddNodeRequested("trigger", p);
+                          else if (res == 66)
+                              safeThis->onAddNodeRequested("pack", p);
+                          else if (res == 67)
+                              safeThis->onAddNodeRequested("unpack", p);
+                          else if (res == 68)
+                              safeThis->onAddNodeRequested("snapshot", p);
+                          else if (res == 69)
+                              safeThis->onAddNodeRequested("pan", p);
+                          else if (res == 70)
+                              safeThis->onAddNodeRequested("env", p);
+                          else if (res == 71)
+                              safeThis->onAddNodeRequested("peak", p);
                       });
 }
 
@@ -1163,7 +1306,7 @@ void GraphCanvas::mouseDown(const juce::MouseEvent& event)
         pendingFloatatomEdit = (visual.style == NodeStyle::floatatom && !strictInHitForFloat && !strictOutHitForFloat);
         pendingFloatatomNodeId = visual.node.id;
         pendingFloatatomMouseDown = event.position;
-        if ((visual.node.op == "bang" || visual.node.op == "msg") && !inPortHit && !outPortConnectHit)
+        if ((visual.node.op == "bang" || visual.node.op == "msg" || visual.node.op == "toggle") && !inPortHit && !outPortConnectHit)
         {
             pendingBangNodeId = visual.node.id;
             pendingBangMouseDown = event.position;
@@ -1210,6 +1353,8 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
         auto dragThreshold = 2;
         if (!pendingBangNodeId.empty())
             dragThreshold = static_cast<int>(std::ceil(bangDragStartPx));
+        if (pendingFloatatomEdit)
+            dragThreshold = juce::jmax(dragThreshold, static_cast<int>(std::ceil(floatatomClickMaxTravelPx)));
         if (event.getDistanceFromDragStart() > dragThreshold)
         {
             draggingNode = pendingDragNode;
@@ -1222,7 +1367,7 @@ void GraphCanvas::mouseDrag(const juce::MouseEvent& event)
 
     if (draggingNode.has_value())
     {
-        if (pendingFloatatomEdit && event.getDistanceFromDragStart() > 2)
+        if (pendingFloatatomEdit && event.getDistanceFromDragStart() > floatatomClickMaxTravelPx)
             pendingFloatatomEdit = false;
         const auto delta = screenToWorld(event.position) - dragStartWorld;
         for (auto& v : visuals)
@@ -1319,7 +1464,7 @@ void GraphCanvas::mouseUp(const juce::MouseEvent& event)
         }
     }
     connectFromNode.reset();
-    if (pendingFloatatomEdit && !pendingFloatatomNodeId.empty() && event.position.getDistanceFrom(pendingFloatatomMouseDown) <= 2.0f)
+    if (pendingFloatatomEdit && !pendingFloatatomNodeId.empty() && event.position.getDistanceFrom(pendingFloatatomMouseDown) <= floatatomClickMaxTravelPx)
         beginInlineEdit(pendingFloatatomNodeId);
     if (!pendingBangNodeId.empty() && event.position.getDistanceFrom(pendingBangMouseDown) <= bangClickMaxTravelPx && onBangTriggered != nullptr)
     {

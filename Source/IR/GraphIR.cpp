@@ -52,10 +52,22 @@ OpSpec opSpecFor(const std::string& op)
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::any, true }, { "q", PortRate::control, true } }, 0 };
     if (op == "svf")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "cutoff", PortRate::any, true }, { "q", PortRate::control, true }, { "mode", PortRate::control, true } }, 0 };
+    if (op == "freeverb")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "room", PortRate::control, true }, { "damp", PortRate::control, true }, { "width", PortRate::control, true }, { "mix", PortRate::control, true } }, 0 };
+    if (op == "plate")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "decay", PortRate::control, true }, { "damp", PortRate::control, true }, { "mix", PortRate::control, true } }, 0 };
+    if (op == "reverb")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "time", PortRate::control, true }, { "damp", PortRate::control, true }, { "mix", PortRate::control, true } }, 0 };
+    if (op == "fdn")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "time", PortRate::control, true }, { "damp", PortRate::control, true }, { "mix", PortRate::control, true } }, 0 };
+    if (op == "convrev")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "size", PortRate::control, true }, { "mix", PortRate::control, true } }, 0 };
     if (op == "delay")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "ms", PortRate::any, true } }, 0 };
     if (op == "cdelay")
         return { PortRate::control, { { "in", PortRate::control, false }, { "ms", PortRate::control, true } }, 0 };
+    if (op == "metro")
+        return { PortRate::control, { { "trig", PortRate::any, true }, { "ms", PortRate::control, true } }, 0 };
     if (op == "apf")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "ms", PortRate::any, true }, { "feedback", PortRate::control, true } }, 0 };
     if (op == "comb")
@@ -68,6 +80,34 @@ OpSpec opSpecFor(const std::string& op)
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "rate", PortRate::control, true } }, 0 };
     if (op == "sah")
         return { PortRate::audio, { { "in", PortRate::audio, false }, { "trig", PortRate::any, false } }, 1 };
+    if (op == "sah_c")
+        return { PortRate::control, { { "in", PortRate::control, false }, { "trig", PortRate::any, false } }, 1 };
+    if (op == "line")
+        return { PortRate::control, { { "target", PortRate::control, false }, { "ms", PortRate::control, true } }, 0 };
+    if (op == "line_sig")
+        return { PortRate::audio, { { "target", PortRate::any, false }, { "ms", PortRate::control, true } }, 0 };
+    if (op == "vline")
+        return { PortRate::audio, { { "target", PortRate::any, false }, { "ms", PortRate::control, true } }, 0 };
+    if (op == "ad")
+        return { PortRate::audio, { { "trig", PortRate::any, false }, { "attackMs", PortRate::control, true }, { "decayMs", PortRate::control, true } }, 0 };
+    if (op == "toggle")
+        return { PortRate::control, { { "trig", PortRate::any, true } }, 0 };
+    if (op == "select")
+        return { PortRate::control, { { "hot", PortRate::control, false }, { "match", PortRate::control, true } }, 0 };
+    if (op == "trigger")
+        return { PortRate::control, { { "in", PortRate::control, false } }, 0 };
+    if (op == "pack")
+        return { PortRate::control, { { "hot", PortRate::control, false }, { "cold", PortRate::control, true } }, 0 };
+    if (op == "unpack")
+        return { PortRate::control, { { "in", PortRate::control, false } }, 0 };
+    if (op == "snapshot")
+        return { PortRate::control, { { "in", PortRate::audio, false } }, 0 };
+    if (op == "pan")
+        return { PortRate::audio, { { "in", PortRate::audio, false }, { "pan", PortRate::control, true } }, 0 };
+    if (op == "env")
+        return { PortRate::control, { { "in", PortRate::audio, false }, { "ms", PortRate::control, true } }, 0 };
+    if (op == "peak")
+        return { PortRate::control, { { "in", PortRate::audio, false }, { "ms", PortRate::control, true } }, 0 };
     if (op == "mtof")
         return { PortRate::control, { { "midi", PortRate::control, false } }, 0 };
     if (op == "mtof_sig")

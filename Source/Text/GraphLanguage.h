@@ -25,5 +25,5 @@ struct CompileResult
 
 CompileResult compile(const std::string& source, const ir::Graph* previousGraph = nullptr);
 std::string prettyPrint(const ir::Graph& graph);
+std::string prettyPrint(const ir::Graph& graph, bool verbose);
 } // namespace duodsp::text
-
